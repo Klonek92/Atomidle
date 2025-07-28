@@ -1,0 +1,1694 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Atom Idle</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://cdn.jsdelivr.net/npm/decimal.js/decimal.min.js"></script>
+</head>
+  <body class="bg-slate-900 text-slate-100">
+    <div id="root"></div>
+    <script>
+'use strict';
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
+const D = Decimal;
+
+const SI_SYMBOLS = [
+  { value: 1, symbol: "" }, { value: 1E3, symbol: "K" }, { value: 1E6, symbol: "M" }, { value: 1E9, symbol: "B" },
+  { value: 1E12, symbol: "T" }, { value: 1E15, symbol: "Qa" }, { value: 1E18, symbol: "Qi" }, { value: 1E21, symbol: "Sx" },
+  { value: 1E24, symbol: "Sp" }, { value: 1E27, symbol: "Oc" }, { value: 1E30, symbol: "No" }, { value: 1E33, symbol: "De" }
+];
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+const getAlphabeticSuffix = (index) => {
+    if (index < 0) return '';
+    let suffix = '';
+    let i = index;
+    while(true) {
+        suffix = ALPHABET[i % 26] + suffix;
+        i = Math.floor(i / 26) - 1;
+        if (i < 0) break;
+    }
+    return suffix;
+};
+
+const formatNumber = (num) => {
+  const dNum = num instanceof D ? num : new D(num);
+
+  if (dNum.isZero()) return "0.00";
+  if (dNum.lt(0.01) && dNum.gt(0)) return dNum.toPrecision(2);
+  if (dNum.lt(1000)) return dNum.toFixed(2);
+
+  const exponent = dNum.e;
+  const tierIndex = Math.floor(exponent / 3);
+
+  if (tierIndex < SI_SYMBOLS.length) {
+      const tier = SI_SYMBOLS[tierIndex];
+      const value = dNum.div(tier.value);
+      return `${value.toFixed(2)}${tier.symbol}`;
+  }
+  const alphabeticIndex = tierIndex - SI_SYMBOLS.length;
+  const suffix = getAlphabeticSuffix(alphabeticIndex);
+  const value = dNum.div(new D(10).pow(tierIndex * 3));
+  return `${value.toFixed(2)}${suffix}`;
+};
+
+const calculatePurchaseCost = (item, amount) => {
+    if (amount <= 0) return new D(0);
+    const baseCost = new D(item.baseCost);
+    const costIncreaseFactor = new D(item.costIncreaseFactor);
+    const count = item.count;
+
+    if (costIncreaseFactor.equals(1)) return baseCost.mul(amount);
+    
+    const r_pow_n = costIncreaseFactor.pow(count);
+    const r_pow_a = costIncreaseFactor.pow(amount);
+
+    const numerator = baseCost.mul(r_pow_n).mul(r_pow_a.sub(1));
+    const denominator = costIncreaseFactor.sub(1);
+    
+    if (denominator.isZero()) return new D(Infinity);
+
+    return numerator.div(denominator);
+};
+
+const calculateMaxAffordable = (item, resources) => {
+    const baseCost = new D(item.baseCost);
+    const r = new D(item.costIncreaseFactor);
+    const n = item.count;
+    const res = new D(resources);
+    
+    const singleCost = baseCost.mul(r.pow(n));
+    if (res.lt(singleCost)) return 0;
+
+    if (r.equals(1)) {
+       if (baseCost.isZero()) return Infinity;
+       return res.div(baseCost).floor().toNumber();
+    }
+    
+    const logArgument = res.mul(r.sub(1)).div(singleCost).add(1);
+    
+    if (logArgument.lte(0)) return 0;
+    
+    const maxAffordable = logArgument.log(r).floor();
+    return maxAffordable.gt(0) ? maxAffordable.toNumber() : 0;
+};
+
+function AtomIcon({ className }) { return React.createElement("svg", { className, viewBox: "0 0 24 24", fill: "none", xmlns: "http://www.w3.org/2000/svg" }, React.createElement("path", { d: "M12 2C6.47715 2 2 6.47715 2 12C2 17.5228 6.47715 22 12 22C17.5228 22 22 17.5228 22 12C22 6.47715 17.5228 2 12 2Z", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round"}), React.createElement("path", { d: "M12 12L20.5 8", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round"}), React.createElement("path", { d: "M12 12L20.5 16", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round"}), React.createElement("path", { d: "M12 12L3.5 8", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round"}), React.createElement("path", { d: "M12 12L3.5 16", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round"})); }
+function UpgradeIcon({ className }) { return React.createElement("svg", { className, viewBox: "0 0 24 24", fill: "none", xmlns: "http://www.w3.org/2000/svg" }, React.createElement("path", { d: "M12 5V19", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round"}), React.createElement("path", { d: "M5 12H19", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round"}), React.createElement("path", { d: "M12 5L7 10", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round"}), React.createElement("path", { d: "M12 5L17 10", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round"})); }
+function GeneratorIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" }), React.createElement("circle", { cx: "12", cy: "12", r: "4" })); }
+function PrestigeIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" })); }
+function ResearchIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" }), React.createElement("line", { x1: "12", y1: "9", x2: "12", y2: "13" }), React.createElement("line", { x1: "12", y1: "17", x2: "12.01", y2: "17" })); }
+function LockIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("rect", { x: "3", y: "11", width: "18", height: "11", rx: "2", ry: "2" }), React.createElement("path", { d: "M7 11V7a5 5 0 0 1 10 0v4" })); }
+function LifeIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" })); }
+function SubjectIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" }), React.createElement("circle", { cx: "12", cy: "7", r: "4" })); }
+function HumanIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" }), React.createElement("circle", { cx: "9", cy: "7", r: "4" }), React.createElement("path", { d: "M23 21v-2a4 4 0 0 0-3-3.87" }), React.createElement("path", { d: "M16 3.13a4 4 0 0 1 0 7.75" })); }
+function SuperHumanIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" }), React.createElement("circle", { cx: "10", cy: "7", r: "4" }), React.createElement("path", { d: "m21.64 7.64-1.28-1.28a1.2 1.2 0 0 0-1.7 0l-1.28 1.28a1.2 1.2 0 0 0 0 1.7l1.28 1.28a1.2 1.2 0 0 0 1.7 0l1.28-1.28a1.2 1.2 0 0 0 0-1.7z" })); }
+function UniverseIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("circle", { cx: "12", cy: "12", r: "10" }), React.createElement("path", { d: "M2.93 9.07a10 10 0 0 1 14.14-14.14m4.95 4.95a10 10 0 0 1-14.14 14.14m-4.95-4.95a10 10 0 0 1 14.14-14.14" })); }
+function BrainIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M9.5 2A2.5 2.5 0 0 1 12 4.5v1.23c.33-.09.67-.16 1-.23a2.5 2.5 0 0 1 2.5 2.5v1.5a2.5 2.5 0 0 1-2.5 2.5h-2.5a2.5 2.5 0 0 1-2.5-2.5V9.5a2.5 2.5 0 0 1 2.5-2.5c.33.07.67.14 1 .23V4.5A2.5 2.5 0 0 1 9.5 2zM12 12h.5a2.5 2.5 0 0 1 2.5 2.5v1.5a2.5 2.5 0 0 1-2.5 2.5h-1A2.5 2.5 0 0 1 9 16v-1.5A2.5 2.5 0 0 1 11.5 12H12zM4.5 9.5A2.5 2.5 0 0 0 2 12v2.5a2.5 2.5 0 0 0 2.5 2.5h1.23c.09-.33.16-.67.23-1a2.5 2.5 0 0 0-2.5-2.5v-1.5a2.5 2.5 0 0 0 2.5-2.5c.07-.33.14-.67.23-1H4.5zm15 0c.07.33.14.67.23 1a2.5 2.5 0 0 0 2.5 2.5v1.5a2.5 2.5 0 0 0-2.5 2.5c-.09.33-.16.67-.23 1h1.23A2.5 2.5 0 0 0 22 14.5V12a2.5 2.5 0 0 0-2.5-2.5h-1.23z" })); }
+function InfinityIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M12 12c-2-2.67-4-4-6-4a4 4 0 1 0 0 8c2 0 4-1.33 6-4zm0 0c2 2.67 4 4 6 4a4 4 0 1 0 0-8c-2 0-4 1.33-6 4z" })); }
+function AutomationIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", { d: "M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 0l-1.63 1.63a1 1 0 0 0-.3 1.05v7.9a2 2 0 0 1-2 2h-2a2 2 0 0 1-2-2v-2a2 2 0 0 1 2-2h.7l-2.8-2.8c-.35-.35-1.02-.35-1.37 0L2 12.07a1 1 0 0 0 0 1.41l2.81 2.81c.35.35.35 1.02 0 1.37L1.4 19.4a1 1 0 0 0 0 1.4l.7.7a1 1 0 0 0 1.4 0l2.8-2.8c.35-.35 1.02-.35 1.37 0l2.8 2.8a1 1 0 0 0 1.4 0l.7-.7a1 1 0 0 0 0-1.4l-2.8-2.8c-.35-.35-.35-1.02 0-1.37l1.63-1.63c.2-.2.4-.3.6-.3h.7a2 2 0 0 1 2 2v2a2 2 0 0 1 2 2h2a2 2 0 0 1 2-2v-7.9c0-.2-.1-.4-.3-.6L14.7 6.3z" })); }
+function GuideIcon({ className }) { return React.createElement("svg", { className, xmlns: "http://www.w3.org/2000/svg", viewBox: "0 0 24 24", fill: "none", stroke: "currentColor", strokeWidth: "2", strokeLinecap: "round", strokeLinejoin: "round" }, React.createElement("path", {d: "M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"}), React.createElement("path", {d: "M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"})); }
+
+const GAME_TICK_RATE_MS = 100;
+const INITIAL_ATOMS_PER_SECOND = new D(0.0);
+const PRESTIGE_REQUIREMENT = new D('1e9');
+const RESEARCH_STARTING_BOOST_AMOUNT = 10;
+const SUBJECTS_UNLOCK_REQUIREMENT = new D('1e27');
+const HUMANS_UNLOCK_REQUIREMENT = new D('1e7');
+const HUMAN_COST_INCREASE_FACTOR = 1.00000005;
+const HUMAN_GENERATOR_BONUS_PER_HUMAN = 0.25;
+const HUMAN_SKILL_POINTS_PER_SECOND_PER_HUMAN = 0.0025;
+const SUPER_HUMAN_UNLOCK_REQUIREMENT = new D('1e6');
+const SUPER_HUMAN_COST_INCREASE_FACTOR = 1.5;
+const ARTIFICIAL_INGENUITY_PER_SUPER_HUMAN_PER_SECOND = 2.5;
+
+const INITIAL_GENERATORS = [
+  {id: 'gen1', name: 'Particle Accelerator', description: 'Generates atoms by colliding particles.', isHidden: false, baseCost: new D(1), costIncreaseFactor: 1.15, baseProduction: new D(0.1), icon: React.createElement(GeneratorIcon, { className: "w-8 h-8 text-cyan-400" })},
+  {id: 'gen2', name: 'Stellar Nursery', description: 'Forges atoms in the heart of a protostar.', isHidden: false, baseCost: new D(25), costIncreaseFactor: 1.20, baseProduction: new D(1), icon: React.createElement(GeneratorIcon, { className: "w-8 h-8 text-amber-400" })},
+  {id: 'gen3', name: 'Quark Factory', description: 'Assembles protons and neutrons from scratch.', isHidden: false, baseCost: new D(250), costIncreaseFactor: 1.25, baseProduction: new D(10), icon: React.createElement(GeneratorIcon, { className: "w-8 h-8 text-rose-400" })},
+  {id: 'gen4', name: 'Supernova Forge', description: 'Creates heavy elements in a stellar explosion.', isHidden: false, baseCost: new D(5000), costIncreaseFactor: 1.30, baseProduction: new D(150), icon: React.createElement(GeneratorIcon, { className: "w-8 h-8 text-indigo-400" })},
+  // {id: 'gen5', name: 'Universal Collider', description: 'Harnesses the power of black holes to generate atoms.', isHidden: true, baseCost: new D(1e6), costIncreaseFactor: 1.35, baseProduction: new D(2000), icon: React.createElement(GeneratorIcon, { className: "w-8 h-8 text-purple-400" })},
+];
+const INITIAL_UPGRADES = [
+  // {id: 'upg0', name: 'Quantum Leap', description: 'Increases all atom production by 50% per level.', isHidden: false, baseCost: new D(500), costIncreaseFactor: 5, effect: () => 1.5, maxLevel: 10, icon: React.createElement(UpgradeIcon, { className: "w-8 h-8 text-green-400" })},
+  {id: 'upg1', name: 'Faster Particles', description: 'Increases all atom production by 100% per level.', isHidden: false, baseCost: new D(500), costIncreaseFactor: 10, effect: () => 2, maxLevel: 10, icon: React.createElement(UpgradeIcon, { className: "w-8 h-8 text-teal-400" })},
+  // hay que subir el coste de upg1 y upg3.
+  {id: 'upg2', name: 'Magnetic Cooling', description: 'Doubles the production of Particle Accelerators.', isHidden: false, baseCost: new D(1000), costIncreaseFactor: 10, effect: () => 2, maxLevel: 10, appliesToGenerator: 'gen1', icon: React.createElement(UpgradeIcon, { className: "w-8 h-8 text-sky-400" })},
+  {id: 'upg3', name: 'Efficient Fusion', description: 'Increases all atom production by 200% per level.', isHidden: false, baseCost: new D(5000), costIncreaseFactor: 20, effect: () => 3, maxLevel: 10, icon: React.createElement(UpgradeIcon, { className: "w-8 h-8 text-fuchsia-400" })},
+  {id: 'upg4', name: 'Cosmic Consciousness', description: 'Increases Life production by 50% per level.', isHidden: false, baseCost: new D('1e27'), costIncreaseFactor: 7.5, effect: () => 1.5, maxLevel: 10, icon: React.createElement(UpgradeIcon, { className: "w-8 h-8 text-violet-400" }), unlockCondition: (gs) => gs.subjectsUnlocked},
+  {id: 'upg5', name: 'Vital Symbiosis', description: 'Each Life now grants an additional 10% atom bonus.', isHidden: false, baseCost: new D('1e30'), costIncreaseFactor: 15, effect: () => 1.1, maxLevel: 10, icon: React.createElement(UpgradeIcon, { className: "w-8 h-8 text-rose-400" }), unlockCondition: (gs) => gs.subjectsUnlocked}
+];
+const RESEARCH_TREE = [
+    {id: 'res1', name: 'Generator Synergy', description: 'Increases global production by 50%.', cost: new D(1), dependencies: [], icon: React.createElement(ResearchIcon, { className: "w-8 h-8 text-green-400" })},
+    {id: 'res2', name: 'Quick Start', description: `Start with ${RESEARCH_STARTING_BOOST_AMOUNT} Particle Accelerators after a Prestige.`, cost: new D(10), dependencies: ['res1'], icon: React.createElement(ResearchIcon, { className: "w-8 h-8 text-cyan-400" })},
+    {id: 'res3', name: 'Enhanced Prestige', description: 'Each Prestige Point now gives a 1.5% bonus instead of 1%.', cost: new D(50), dependencies: ['res1'], icon: React.createElement(ResearchIcon, { className: "w-8 h-8 text-yellow-400" })},
+    {id: 'res4', name: 'Loyalty Bonus', description: 'Keep 1% of your atoms on prestige.', cost: new D(100), dependencies: ['res3', 'res2'], icon: React.createElement(ResearchIcon, { className: "w-8 h-8 text-indigo-400" })},
+    {id: 'res5', name: 'Accelerating the Accelerator', description: 'For every 50 Supernova Forges, +5 max levels to Magnetic Cooling.', cost: new D(1000), dependencies: ['res4'], icon: React.createElement(ResearchIcon, { className: "w-8 h-8 text-indigo-400" })},
+    {id: 'res6', name: 'Atomic Singularity', description: 'The Life bonus to atoms is 25% more effective.', cost: new D('1e10'), dependencies: ['res5'], icon: React.createElement(ResearchIcon, { className: "w-8 h-8 text-red-500" }), unlockCondition: (gs) => gs.subjectsUnlocked},
+    {id: 'res7', name: 'Synergy of Origins', description: 'For every 10 A-01 Subjects, +5 max levels to Cosmic Consciousness.', cost: new D('1e12'), dependencies: ['res6'], icon: React.createElement(ResearchIcon, { className: "w-8 h-8 text-pink-400" }), unlockCondition: (gs) => gs.subjectsUnlocked},
+    {id: 'res8', name: 'Automated Generators', description: 'Automatically buys the cheapest affordable generator.', cost: new D('1e15'), dependencies: ['res7'], icon: React.createElement(AutomationIcon, { className: "w-8 h-8 text-blue-400" }), unlockCondition: (gs) => gs.humansUnlocked && gs.subjectsUnlocked},
+    {id: 'res9', name: 'Automated Upgrades', description: 'Automatically buys the cheapest affordable upgrade.', cost: new D('5e15'), dependencies: ['res7'], icon: React.createElement(AutomationIcon, { className: "w-8 h-8 text-purple-400" }), unlockCondition: (gs) => gs.humansUnlocked && gs.subjectsUnlocked}
+];
+const INITIAL_SUBJECTS = [
+    {id: 'sub1', name: 'A-01: The Origin', description: 'Initiates the creation of Lives.', baseCost: SUBJECTS_UNLOCK_REQUIREMENT, costIncreaseFactor: 500, costResource: 'atoms', baseLifeProduction: new D(0.01), icon: React.createElement(SubjectIcon, { className: "w-8 h-8 text-white" })},
+    {id: 'sub2', name: 'A-02: The Successor', description: 'Increases Life production.', baseCost: new D(1), costIncreaseFactor: 1.1, costResource: 'lives', baseLifeProduction: new D(0.1), icon: React.createElement(SubjectIcon, { className: "w-8 h-8 text-red-400" })},
+    {id: 'sub3', name: 'A-03: The Colony', description: 'Multiplies Life production.', baseCost: new D(100), costIncreaseFactor: 1.1, costResource: 'lives', baseLifeProduction: new D(1), icon: React.createElement(SubjectIcon, { className: "w-8 h-8 text-orange-400" })},
+    {id: 'sub4', name: 'A-04: The Consciousness', description: 'Drastically accelerates Life generation.', baseCost: new D(10000), costIncreaseFactor: 1.1, costResource: 'lives', baseLifeProduction: new D(10), icon: React.createElement(SubjectIcon, { className: "w-8 h-8 text-yellow-400" })},
+    {id: 'sub5', name: 'A-05: The Pantheon', description: 'Reaches a transcendental state of Life creation.', baseCost: new D('1e6'), costIncreaseFactor: 1.1, costResource: 'lives', baseLifeProduction: new D(200), icon: React.createElement(SubjectIcon, { className: "w-8 h-8 text-purple-400" })}
+];
+const HUMAN_SKILLS = [
+    {id: 'hs1', name: 'Human Ingenuity', description: 'Increases the additive bonus of each Human by +1% per level.', baseCost: new D(1), costIncreaseFactor: 1.5, icon: React.createElement(BrainIcon, {className: "w-8 h-8 text-pink-400"})},
+    {id: 'hs2', name: 'Efficient Engineering', description: 'Reduces the cost of all generators by 5% per level.', baseCost: new D(10), costIncreaseFactor: 2, maxLevel: 50, icon: React.createElement(GeneratorIcon, {className: "w-8 h-8 text-teal-400"})},
+    {id: 'hs3', name: 'Life Essence', description: 'Increases all Life production by 1% per level.', baseCost: new D(5), costIncreaseFactor: 1.8, icon: React.createElement(LifeIcon, {className: "w-8 h-8 text-rose-400"})}
+];
+const INFINITE_PROJECTS = [
+    {id: 'ip1', name: 'Infinite Atom Drive', description: 'Increases all atom production by 10%.', baseCost: new D('1e30'), costIncreaseFactor: 1e3, icon: React.createElement(InfinityIcon, {className: "w-8 h-8 text-cyan-300"})},
+    {id: 'ip2', name: 'Endless Knowledge', description: 'Increases Skill Point generation by 10%.', baseCost: new D('1e33'), costIncreaseFactor: 1e4, icon: React.createElement(InfinityIcon, {className: "w-8 h-8 text-purple-300"})}
+];
+const INITIAL_PRESTIGE_SKILLS = [
+    {id: 'ps1', name: 'Prestige Efficiency', description: 'Increases Prestige Point gain by 10% per level.', baseCost: new D(10), costIncreaseFactor: 1.5, maxLevel: 50, icon: React.createElement(PrestigeIcon, {className: "w-8 h-8 text-yellow-300"})},
+    {id: 'ps2', name: 'Research Acceleration', description: 'Reduces research costs by 1% per level.', baseCost: new D(50), costIncreaseFactor: 3, maxLevel: 50, icon: React.createElement(ResearchIcon, {className: "w-8 h-8 text-yellow-500"})},
+    {id: 'ps3', name: 'Starting Atoms Boost', description: 'Start with 100% more atoms after prestige per level.', baseCost: new D(100), costIncreaseFactor: 10, maxLevel: 10, icon: React.createElement(AtomIcon, {className: "w-8 h-8 text-cyan-300"})}
+];
+const INITIAL_LIFE_TECHNOLOGIES = [
+    {id: 'lt1', name: 'Enhanced Vitality', description: 'Increases all Life production by 10% per level.', baseCost: new D(1000), costIncreaseFactor: 2, icon: React.createElement(LifeIcon, {className: "w-8 h-8 text-red-300"})},
+    {id: 'lt2', name: 'Symbiotic Evolution', description: 'Increases the effect of Vital Symbiosis (upg5) by 10% per level.', baseCost: new D(5000), costIncreaseFactor: 3, icon: React.createElement(UpgradeIcon, {className: "w-8 h-8 text-rose-400"})},
+    {id: 'lt3', name: 'Consciousness Expansion', description: 'Increases the effect of Cosmic Consciousness (upg4) by 2% per level.', baseCost: new D(10000), costIncreaseFactor: 5, icon: React.createElement(BrainIcon, {className: "w-8 h-8 text-violet-400"})},
+];
+const INITIAL_SUPER_HUMAN_SKILLS = [
+    {id: 'shs1', name: 'Transcendent Mind', description: 'Increases Artificial Ingenuity production by 10% per level.', baseCost: new D(1), costIncreaseFactor: 2, icon: React.createElement(BrainIcon, {className: "w-8 h-8 text-sky-300"})},
+    {id: 'shs2', name: 'Stellar Amplification', description: 'Increases Stellar Nursery production by 500% per level.', baseCost: new D(3), costIncreaseFactor: 4, icon: React.createElement(GeneratorIcon, {className: "w-8 h-8 text-amber-300"})},
+    {id: 'shs3', name: 'Cosmic Architects', description: 'Increases the additive bonus of each Human by +0.01 per level.', baseCost: new D(5), costIncreaseFactor: 5, icon: React.createElement(HumanIcon, {className: "w-8 h-8 text-green-300"})},
+    {id: 'shs4', name: 'Accelerated Evolution', description: 'Increases Skill Point generation by 50% per level.', baseCost: new D(10), costIncreaseFactor: 3, icon: React.createElement(InfinityIcon, {className: "w-8 h-8 text-pink-300"})},
+    {id: 'shs5', name: 'Singularity Start', description: 'Start with 10 Humans after a Super Human reset per level.', baseCost: new D(1000), costIncreaseFactor: 10, maxLevel: 10, icon: React.createElement(SuperHumanIcon, {className: "w-8 h-8 text-purple-300"})}
+];
+
+const Header = ({ atoms, atomsPerSecond, prestigePoints, lives, livesPerSecond, subjectsUnlocked, humans, humansUnlocked, skillPoints, superHumans, artificialIngenuity, superHumansUnlocked }) => {
+  return React.createElement("header", { className: "bg-slate-900/50 backdrop-blur-sm sticky top-0 z-10 p-4 border-b border-slate-700" },
+      React.createElement("div", { className: "max-w-7xl mx-auto flex justify-between items-center gap-4" },
+        React.createElement("div", { className: "flex items-center space-x-3" },
+            React.createElement(AtomIcon, { className: "w-10 h-10 text-cyan-300 animate-pulse" }),
+            React.createElement("h1", { className: "text-2xl md:text-3xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-cyan-300 to-blue-500" }, "Atom Idle")
+        ),
+        React.createElement("div", { className: "flex items-center gap-2 md:gap-6 flex-wrap justify-end" },
+            superHumansUnlocked && React.createElement("div", { className: "text-right" },
+                React.createElement("p", { className: "text-lg md:text-xl font-mono font-bold text-sky-400 flex items-center justify-end gap-2" }, React.createElement(SuperHumanIcon, { className: "w-5 h-5" }), formatNumber(superHumans)),
+                React.createElement("p", { className: "text-xs md:text-sm text-sky-500" }, "Super Humans")
+            ),
+             superHumansUnlocked && React.createElement("div", { className: "text-right" },
+                React.createElement("p", { className: "text-lg md:text-xl font-mono font-bold text-purple-400 flex items-center justify-end gap-2" }, React.createElement(BrainIcon, { className: "w-5 h-5" }), formatNumber(artificialIngenuity)),
+                React.createElement("p", { className: "text-xs md:text-sm text-purple-500" }, "Ingenuity")
+            ),
+            humansUnlocked && React.createElement("div", { className: "text-right" },
+                React.createElement("p", { className: "text-lg md:text-xl font-mono font-bold text-pink-400 flex items-center justify-end gap-2" }, React.createElement(BrainIcon, { className: "w-5 h-5" }), formatNumber(skillPoints)),
+                React.createElement("p", { className: "text-xs md:text-sm text-pink-500" }, "Skill Points")
+            ),
+            humansUnlocked && React.createElement("div", { className: "text-right" },
+                React.createElement("p", { className: "text-lg md:text-xl font-mono font-bold text-green-400 flex items-center justify-end gap-2" }, React.createElement(HumanIcon, { className: "w-5 h-5" }), formatNumber(humans.total)),
+                React.createElement("p", { className: "text-xs md:text-sm text-green-500" }, "Humans")
+            ),
+            subjectsUnlocked && React.createElement("div", { className: "text-right" },
+                React.createElement("p", { className: "text-lg md:text-xl font-mono font-bold text-red-400 flex items-center justify-end gap-2" }, React.createElement(LifeIcon, { className: "w-5 h-5" }), formatNumber(lives)),
+                React.createElement("p", { className: "text-xs md:text-sm text-red-500" }, formatNumber(livesPerSecond), " Lives/s")
+            ),
+            (atoms.gte(PRESTIGE_REQUIREMENT) || prestigePoints.gt(0)) && React.createElement("div", { className: "text-right" },
+                React.createElement("p", { className: "text-lg md:text-xl font-mono font-bold text-yellow-400 flex items-center justify-end gap-2" },
+                    React.createElement(PrestigeIcon, { className: "w-5 h-5" }),
+                    formatNumber(prestigePoints)
+                ),
+                React.createElement("p", { className: "text-xs md:text-sm text-yellow-500" }, "Prestige Points")
+            ),
+            React.createElement("div", { className: "text-right" },
+                React.createElement("p", { className: "text-xl md:text-2xl font-mono font-bold text-white" }, formatNumber(atoms)),
+                React.createElement("p", { className: "text-xs md:text-sm text-cyan-400" }, formatNumber(atomsPerSecond), " atoms/s")
+            )
+        )
+      )
+    );
+};
+
+const GeneratorItem = ({ generator, onBuy, atoms, buyAmount, assignedHumans, humanBonusPerHuman, totalGlobalMultiplier, prestigeBonus, researchMultiplier, lifeBonus, infiniteProjectBonus, ip1Special, specificGeneratorMultipliers, superHumanSkills }) => {
+  const amountToBuy = useMemo(() => {
+    if (buyAmount === 'MAX') return calculateMaxAffordable(generator, atoms);
+    return buyAmount;
+  }, [buyAmount, generator, atoms]);
+
+  const cost = useMemo(() => calculatePurchaseCost(generator, amountToBuy), [generator, amountToBuy]);
+
+  const displayCost = useMemo(() => {
+    if (buyAmount === 'MAX' && amountToBuy === 0) return calculatePurchaseCost(generator, 1);
+    return cost;
+  }, [buyAmount, amountToBuy, cost, generator]);
+
+  const canAfford = atoms.gte(cost) && amountToBuy > 0;
+  const humanBonus = assignedHumans * humanBonusPerHuman * 100;
+
+  const specificMultiplier = specificGeneratorMultipliers[generator.id] || new D(1);
+  const humanBonusMultiplier = new D(1).plus(new D(assignedHumans).mul(humanBonusPerHuman));
+  
+  let gen2Boost = new D(1);
+    if (generator.id === 'gen2' && superHumanSkills) {
+        const gen2Skill = superHumanSkills.find(s => s.id === 'shs2');
+        if (gen2Skill) {
+            gen2Boost = new D(6).pow(gen2Skill.level);
+        }
+    }
+
+  const effectiveProductionPerGenerator = new D(generator.baseProduction).mul(specificMultiplier).mul(humanBonusMultiplier).mul(totalGlobalMultiplier).mul(prestigeBonus).mul(researchMultiplier).mul(lifeBonus).mul(infiniteProjectBonus).mul(ip1Special).mul(gen2Boost);
+  const totalProductionFromGenerator = effectiveProductionPerGenerator.mul(generator.count);
+
+  return React.createElement("div", { className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center space-x-4 transition-all duration-300 hover:border-cyan-500 hover:bg-slate-800" },
+      React.createElement("div", { className: "flex-shrink-0" }, generator.icon),
+      React.createElement("div", { className: "flex-grow" },
+        React.createElement("div", { className: "flex justify-between items-baseline" },
+            React.createElement("h3", { className: "text-lg font-bold text-white" }, generator.name),
+            React.createElement("span", { className: "text-2xl font-bold text-slate-300" }, formatNumber(generator.count))
+        ),
+        React.createElement("p", { className: "text-sm text-slate-400" }, generator.description),
+        React.createElement("p", { className: "text-sm text-cyan-400" }, "+", formatNumber(effectiveProductionPerGenerator), " APS each (Total: ", formatNumber(totalProductionFromGenerator), " APS)"),
+        humanBonus > 0 && React.createElement("p", { className: "text-sm text-green-400" }, "+", formatNumber(humanBonus), "% from Humans")
+      ),
+      React.createElement("button", { onClick: () => onBuy(generator.id, amountToBuy), disabled: !canAfford, className: `w-32 flex-shrink-0 px-4 py-2 font-bold rounded-lg transition-all duration-200 text-slate-900 ${ canAfford ? 'bg-cyan-400 hover:bg-cyan-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed' }`},
+        amountToBuy > 1 ? `Buy x${formatNumber(amountToBuy)}` : 'Buy', React.createElement("br"), React.createElement("span", { className: "font-mono" }, formatNumber(displayCost)))
+    );
+};
+
+const UpgradeItem = ({ upgrade, onBuy, atoms, buyAmount }) => {
+  const isAlreadyMaxLevel = upgrade.maxLevel !== undefined && upgrade.level >= upgrade.maxLevel;
+  const amountToBuy = useMemo(() => {
+    if (isAlreadyMaxLevel) return 0;
+    let desiredAmount = buyAmount === 'MAX' ? calculateMaxAffordable({ ...upgrade, count: upgrade.level }, atoms) : buyAmount;
+    if (upgrade.maxLevel !== undefined) return Math.min(desiredAmount, upgrade.maxLevel - upgrade.level);
+    return desiredAmount;
+  }, [buyAmount, upgrade, atoms, isAlreadyMaxLevel]);
+
+  const cost = useMemo(() => {
+    if (amountToBuy <= 0) return new D(0);
+    return calculatePurchaseCost({ ...upgrade, count: upgrade.level }, amountToBuy);
+  }, [upgrade, amountToBuy]);
+
+  const displayCost = useMemo(() => {
+      if (buyAmount === 'MAX' && amountToBuy === 0 && !isAlreadyMaxLevel) return calculatePurchaseCost({ ...upgrade, count: upgrade.level }, 1);
+      return cost;
+  }, [buyAmount, amountToBuy, cost, upgrade, isAlreadyMaxLevel]);
+  
+  const canAfford = atoms.gte(cost) && amountToBuy > 0;
+  return React.createElement("div", { className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center space-x-4 transition-all duration-300 hover:border-teal-500 hover:bg-slate-800" },
+      React.createElement("div", { className: "flex-shrink-0" }, upgrade.icon),
+      React.createElement("div", { className: "flex-grow" },
+        React.createElement("h3", { className: "text-lg font-bold text-white" }, upgrade.name),
+        React.createElement("p", { className: "text-sm text-slate-400" }, upgrade.description),
+        upgrade.maxLevel !== undefined ? React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", upgrade.level, " / ", upgrade.maxLevel) : React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", upgrade.level)
+      ),
+      React.createElement("button", { onClick: () => onBuy(upgrade.id, amountToBuy), disabled: !canAfford || isAlreadyMaxLevel, className: `w-32 flex-shrink-0 px-4 py-2 font-bold rounded-lg transition-all duration-200 text-slate-900 ${ isAlreadyMaxLevel ? 'bg-green-500 cursor-not-allowed' : canAfford ? 'bg-teal-400 hover:bg-teal-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed' }`},
+        isAlreadyMaxLevel ? 'MAX' : amountToBuy > 1 ? `Buy x${formatNumber(amountToBuy)}` : 'Buy',
+        !isAlreadyMaxLevel && React.createElement(React.Fragment, null, React.createElement("br"), React.createElement("span", { className: "font-mono" }, formatNumber(displayCost)))
+      )
+    );
+};
+
+function calculatePrestigeGainWithSoftcap(currentPrestige, prestigeToGain) {
+    const SOFTCAP_START = new D('1e114'); 
+    const SOFTCAP_FACTOR = new D('1.0000001');  
+    const current = new D(currentPrestige);
+    const gain = new D(prestigeToGain);
+
+    if (current.add(gain).lte(SOFTCAP_START)) {
+        return gain.floor();
+    }
+
+    const normalGain = D.max(0, SOFTCAP_START.sub(current));
+    const overGain = gain.sub(normalGain);
+
+    let pointsFromOverGain;
+
+    if (overGain.lte(0)) {
+        pointsFromOverGain = new D(0);
+    } else {
+
+        const r_minus_1 = SOFTCAP_FACTOR.sub(1); 
+        const log_argument = overGain.mul(r_minus_1).add(1);
+        
+        if (log_argument.lte(1)) {
+            pointsFromOverGain = new D(0);
+        } else {
+            pointsFromOverGain = log_argument.log(SOFTCAP_FACTOR);
+        }
+    }
+    
+    return normalGain.add(pointsFromOverGain).floor();
+}
+
+const PrestigeDisplay = ({ atoms, prestigePoints, onPrestige, prestigeRequirement, research, prestigeSkillBonus }) => {
+  
+  const canPrestige = atoms.gte(prestigeRequirement);
+  const prestigePointsOnResetBase = atoms.div(prestigeRequirement).sqrt().mul(prestigeSkillBonus);
+  const prestigePointsOnReset = calculatePrestigeGainWithSoftcap(prestigePoints, prestigePointsOnResetBase);
+  const prestigeBonusPerPoint = research.find(r => r.id === 'res3' && r.isPurchased) ? 1.5 : 1;
+  const totalBonus = prestigePoints.mul(prestigeBonusPerPoint);
+  return React.createElement("div", { className: "mt-8" },
+      React.createElement("h2", { className: "text-2xl font-bold mb-4 flex items-center gap-2 text-slate-300" }, React.createElement(PrestigeIcon, { className: "w-6 h-6 text-yellow-300" }), "Prestige"),
+      React.createElement("div", { className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex flex-col md:flex-row items-center justify-between gap-4" },
+        React.createElement("div", null,
+          React.createElement("p", { className: "text-slate-300" }, "Prestige Points: ", React.createElement("span", { className: "font-bold text-yellow-300" }, formatNumber(prestigePoints))),
+          React.createElement("p", { className: "text-slate-400 text-sm" }, "Total production bonus: ", React.createElement("span", { className: "font-bold text-yellow-400" }, "+", formatNumber(totalBonus), "%")),
+          React.createElement("p", { className: "text-xs text-slate-500 mt-1" }, "You will reset your progress to gain Prestige Points that permanently increase your production.")
+        ),
+        React.createElement("button", { onClick: onPrestige, disabled: !canPrestige, className: `px-6 py-3 font-bold rounded-lg transition-all duration-200 text-slate-900 ${ canPrestige ? 'bg-yellow-400 hover:bg-yellow-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed' }`},
+          React.createElement("div", null, "Prestige for +", formatNumber(prestigePointsOnReset), " Points"),
+          React.createElement("div", { className: "text-xs font-normal" }, "Requires ", formatNumber(prestigeRequirement), " atoms")
+        )
+      )
+    );
+};
+
+const ResearchItem = ({ research, allResearch, prestigePoints, onBuy, researchCostReduction }) => {
+    const dependencies = research.dependencies.map(depId => allResearch.find(r => r.id === depId)).filter(r => !!r);
+    const dependenciesMet = dependencies.every(dep => dep.isPurchased);
+    const effectiveCost = new D(research.cost).mul(researchCostReduction);
+    const canAfford = prestigePoints.gte(effectiveCost);
+    const canBuy = !research.isPurchased && dependenciesMet && canAfford;
+    const isLocked = !research.isPurchased && !dependenciesMet;
+    let buttonContent, buttonClass;
+    if (research.isPurchased) {
+        buttonContent = 'Purchased';
+        buttonClass = 'bg-green-600 cursor-not-allowed';
+    } else if (isLocked) {
+        buttonContent = React.createElement(LockIcon, { className: "w-5 h-5 mx-auto" });
+        buttonClass = 'bg-slate-700 cursor-not-allowed';
+    } else {
+        buttonContent = React.createElement("div", { className: "flex items-center justify-center gap-2" }, React.createElement(PrestigeIcon, { className: "w-5 h-5" }), React.createElement("span", null, formatNumber(effectiveCost)));
+        buttonClass = canBuy ? 'bg-yellow-500 hover:bg-yellow-400 active:scale-95 text-slate-900' : 'bg-slate-600 cursor-not-allowed text-slate-400';
+    }
+    return React.createElement("div", { className: `bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center space-x-4 transition-all duration-300 ${research.isPurchased ? 'border-green-500' : isLocked ? 'opacity-60' : 'hover:border-yellow-500'}`},
+            React.createElement("div", { className: "flex-shrink-0" }, research.icon),
+            React.createElement("div", { className: "flex-grow" },
+                React.createElement("h3", { className: "text-lg font-bold text-white" }, research.name),
+                React.createElement("p", { className: "text-sm text-slate-400" }, research.description),
+                isLocked && React.createElement("div", { className: "text-xs text-rose-400 mt-1" }, "Requires: ", dependencies.filter(d => !d.isPurchased).map(d => d.name).join(', '))
+            ),
+            React.createElement("button", { onClick: () => onBuy(research.id), disabled: !canBuy || isLocked || research.isPurchased, className: `w-32 flex-shrink-0 h-12 px-4 py-2 font-bold rounded-lg transition-all duration-200 ${buttonClass}`}, buttonContent)
+        );
+};
+
+const InfiniteProjectItem = ({ project, onBuy, atoms }) => {
+    const cost = new D(project.baseCost).mul(new D(project.costIncreaseFactor).pow(project.level));
+    const canAfford = atoms.gte(cost);
+
+    return React.createElement("div", { className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center space-x-4 transition-all duration-300 hover:border-purple-500 hover:bg-slate-800" },
+        React.createElement("div", { className: "flex-shrink-0" }, project.icon),
+        React.createElement("div", { className: "flex-grow" },
+            React.createElement("h3", { className: "text-lg font-bold text-white" }, project.name),
+            React.createElement("p", { className: "text-sm text-slate-400" }, project.description),
+            React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", formatNumber(project.level))
+        ),
+        React.createElement("button", {
+            onClick: () => onBuy(project.id),
+            disabled: !canAfford,
+            className: `w-40 flex-shrink-0 px-4 py-2 font-bold rounded-lg transition-all duration-200 text-slate-900 ${canAfford ? 'bg-purple-400 hover:bg-purple-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed'}`
+        },
+            "Upgrade", React.createElement("br"), React.createElement("span", { className: "font-mono" }, formatNumber(cost), " Atoms")
+        )
+    );
+};
+
+
+const ResearchTree = ({ research, prestigePoints, onBuyResearch, infiniteProjects, onBuyInfiniteProject, atoms, researchCostReduction }) => {
+    if (research.length === 0) return null;
+    const areAnyHumansUnlocked = infiniteProjects.length > 0;
+
+    return React.createElement("div", { className: "mt-8" },
+        React.createElement("h2", { className: "text-2xl font-bold mb-4 flex items-center gap-2 text-slate-300" }, React.createElement(ResearchIcon, { className: "w-6 h-6 text-yellow-300" }), "Research Tree"),
+        React.createElement("div", { className: "space-y-3" }, research.map(res => React.createElement(ResearchItem, { key: res.id, research: res, allResearch: research, prestigePoints: prestigePoints, onBuy: onBuyResearch, researchCostReduction: researchCostReduction }))),
+        
+        areAnyHumansUnlocked && React.createElement("div", {className: "mt-12"},
+            React.createElement("h2", { className: "text-2xl font-bold mb-4 flex items-center gap-2 text-slate-300" }, React.createElement(InfinityIcon, { className: "w-6 h-6 text-purple-300" }), "Infinite Projects"),
+            React.createElement("div", { className: "space-y-3" }, infiniteProjects.map(proj => React.createElement(InfiniteProjectItem, { key: proj.id, project: proj, onBuy: onBuyInfiniteProject, atoms: atoms })))
+        )
+    );
+};
+
+const SubjectItem = ({ subject, onBuy, gameState, buyAmount, lifeProductionMultiplier }) => {
+  let currentResourceAmount;
+  let resourceIcon = null;
+  if (subject.costResource === 'atoms') {
+    currentResourceAmount = gameState.atoms;
+    resourceIcon = React.createElement(AtomIcon, { className: "w-5 h-5" });
+  } else if (subject.costResource === 'lives') {
+    currentResourceAmount = gameState.lives;
+    resourceIcon = React.createElement(LifeIcon, { className: "w-5 h-5" });
+  } else {
+    currentResourceAmount = gameState.prestigePoints;
+    resourceIcon = React.createElement(PrestigeIcon, { className: "w-5 h-5" });
+  }
+
+  const amountToBuy = useMemo(() => {
+    if (buyAmount === 'MAX') return calculateMaxAffordable(subject, currentResourceAmount);
+    return buyAmount;
+  }, [buyAmount, subject, currentResourceAmount]);
+
+  const totalCost = useMemo(() => calculatePurchaseCost(subject, amountToBuy), [subject, amountToBuy]);
+
+  const displayCost = useMemo(() => {
+      if (buyAmount === 'MAX' && amountToBuy === 0) return calculatePurchaseCost(subject, 1);
+      return totalCost;
+  }, [buyAmount, amountToBuy, totalCost, subject]);
+
+  const canAfford = currentResourceAmount.gte(totalCost) && amountToBuy > 0;
+
+  let buttonClass = 'bg-slate-600 cursor-not-allowed';
+  if (canAfford) {
+    if (subject.costResource === 'atoms') buttonClass = 'bg-cyan-500 hover:bg-cyan-400';
+    else if (subject.costResource === 'lives') buttonClass = 'bg-red-500 hover:bg-red-400';
+    else buttonClass = 'bg-yellow-500 hover:bg-yellow-400';
+  }
+
+  const buttonText = buyAmount === 'MAX' ? `Buy Max (${formatNumber(amountToBuy > 0 ? amountToBuy : 0)})` : `Buy x${buyAmount}`;
+
+  const effectiveLifeProductionPerSubject = new D(subject.baseLifeProduction).mul(lifeProductionMultiplier);
+  const totalLifeProductionFromSubject = effectiveLifeProductionPerSubject.mul(subject.count);
+
+  return React.createElement("div", { className: `bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center space-x-4 transition-all duration-300 hover:border-purple-500`},
+      React.createElement("div", { className: "flex-shrink-0" }, subject.icon),
+      React.createElement("div", { className: "flex-grow" },
+        React.createElement("div", { className: "flex justify-between items-baseline" },
+            React.createElement("h3", { className: "text-lg font-bold text-white" }, subject.name),
+            subject.count > 0 && React.createElement("span", { className: "text-2xl font-bold text-slate-300" }, formatNumber(subject.count))
+        ),
+        React.createElement("p", { className: "text-sm text-slate-400" }, subject.description),
+        React.createElement("p", { className: "text-sm text-purple-400" }, "+", formatNumber(effectiveLifeProductionPerSubject), " Lives/s each (Total: ", formatNumber(totalLifeProductionFromSubject), " Lives/s)")
+      ),
+      React.createElement("button", { onClick: () => onBuy(subject.id, amountToBuy), disabled: !canAfford, className: `w-40 flex-shrink-0 px-4 py-2 font-bold rounded-lg transition-all duration-200 text-slate-900 ${buttonClass}`},
+        React.createElement("div", { className: 'flex flex-col items-center' },
+            React.createElement("span", null, buttonText),
+            React.createElement("div", { className: "flex items-center justify-center gap-1 font-mono" }, resourceIcon, React.createElement("span", null, formatNumber(displayCost)))
+        )
+      )
+    );
+};
+
+const HumanAscension = ({ lives, onAscend, unlockRequirement, humansTotal }) => {
+  const canAscend = lives.gte(unlockRequirement);
+  const humansOnReset = useMemo(() => {
+    if (!lives.gte(unlockRequirement)) return 0;
+    const item = {
+        baseCost: HUMANS_UNLOCK_REQUIREMENT,
+        costIncreaseFactor: HUMAN_COST_INCREASE_FACTOR,
+        count: humansTotal ?? 0
+    };
+    return calculateMaxAffordable(item, lives);
+  }, [lives, humansTotal, unlockRequirement]);
+
+  const costOfNextHuman = useMemo(() => {
+    const item = {
+        baseCost: HUMANS_UNLOCK_REQUIREMENT,
+        costIncreaseFactor: HUMAN_COST_INCREASE_FACTOR,
+        count: humansTotal ?? 0
+    };
+    return calculatePurchaseCost(item, 1);
+  }, [humansTotal]);
+
+
+
+  return React.createElement("div", { className: "mt-8" },
+      React.createElement("h2", { className: "text-2xl font-bold mb-4 flex items-center gap-2 text-slate-300" }, React.createElement(HumanIcon, { className: "w-6 h-6 text-green-300" }), "Human Ascension"),
+      React.createElement("div", { className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex flex-col md:flex-row items-center justify-between gap-4" },
+        React.createElement("div", null,
+          React.createElement("p", { className: "text-slate-300" }, "Reach ", formatNumber(unlockRequirement), " Lives to ascend and create Humans."),
+          React.createElement("p", { className: "text-slate-400 text-sm" }, "Ascending will reset ALL prior progress (including Prestige Points and Research). The only thing you keep and gain are Humans."),
+           React.createElement("p", { className: "text-xs text-slate-500 mt-1" }, "Humans can be assigned to Generators to provide a powerful production boost."),
+
+           React.createElement("p", { className: "text-sm text-green-400 mt-2 font-semibold" }, "Next Human Cost: ", React.createElement("span", {className: "font-mono"}, formatNumber(costOfNextHuman), " Lives"))
+        ),
+        React.createElement("button", { onClick: () => onAscend(humansOnReset), disabled: !canAscend || humansOnReset === 0, className: `px-6 py-3 font-bold rounded-lg transition-all duration-200 text-slate-900 ${ (canAscend && humansOnReset > 0) ? 'bg-green-400 hover:bg-green-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed' }`},
+          React.createElement("div", null, "Ascend for +", formatNumber(humansOnReset), " Humans"),
+          React.createElement("div", { className: "text-xs font-normal" }, "Requires ", formatNumber(unlockRequirement), " Lives")
+        )
+      )
+    );
+};
+
+
+const Subjects = ({ subjects, gameState, onBuySubject, onAscend, buyAmount, setBuyAmount, lifeProductionMultiplier, lifeTechnologies, onBuyLifeTechnology, lifeTechBuyAmount, setLifeTechBuyAmount }) => {
+    const [subjectSubTab, setSubjectSubTab] = useState('subjects');
+
+    return React.createElement("div", { className: "mt-4" },
+        React.createElement("div", { className: "text-center mb-6" },
+            React.createElement("h2", { className: "text-3xl font-bold mb-2 flex items-center justify-center gap-3 text-slate-300" }, React.createElement(SubjectIcon, { className: "w-8 h-8 text-purple-300" }), "Subjects"),
+            React.createElement("p", { className: "text-slate-400 max-w-2xl mx-auto" }, "Subjects are entities that generate Lives, a resource that drastically boosts your atom production. Acquiring the first one is an irreversible step.")
+        ),
+        React.createElement("div", { className: "mb-6 flex justify-center border-b border-slate-700" },
+            React.createElement("button", { onClick: () => setSubjectSubTab('subjects'), className: `px-6 py-2 text-lg font-semibold border-b-2 transition-colors ${subjectSubTab === 'subjects' ? 'border-purple-400 text-purple-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Subjects"),
+            React.createElement("button", { onClick: () => setSubjectSubTab('technologies'), className: `px-6 py-2 text-lg font-semibold border-b-2 transition-colors ${subjectSubTab === 'technologies' ? 'border-red-400 text-red-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Life Technologies")
+        ),
+
+        subjectSubTab === 'subjects' && React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "flex justify-center items-center mb-4" },
+                React.createElement("span", { className: "text-slate-400 mr-2 text-sm" }, "Buy:"),
+                [1, 5, 10, 50, 'MAX'].map((amount) => React.createElement("button", { key: amount.toString(), onClick: () => setBuyAmount(amount), className: `w-12 px-3 py-1 text-sm font-bold rounded-md ml-1 transition-colors ${buyAmount === amount ? 'bg-purple-500 text-slate-900' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}` }, amount))
+            ),
+            React.createElement("div", { className: "space-y-4 max-w-4xl mx-auto" }, subjects.map(sub => React.createElement(SubjectItem, { key: sub.id, subject: sub, gameState: gameState, onBuy: onBuySubject, buyAmount: buyAmount, lifeProductionMultiplier: lifeProductionMultiplier }))),
+            gameState.humansUnlocked && React.createElement(HumanAscension, { 
+                lives: gameState.lives, 
+                onAscend: onAscend, 
+                unlockRequirement: HUMANS_UNLOCK_REQUIREMENT,
+                humansTotal: gameState.humans.total
+            })
+        ),
+        
+        subjectSubTab === 'technologies' && React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "flex justify-center items-center mb-4" },
+                React.createElement("span", { className: "text-slate-400 mr-2 text-sm" }, "Buy:"),
+                [1, 5, 10, 50, 'MAX'].map((amount) => React.createElement("button", { key: amount.toString(), onClick: () => setLifeTechBuyAmount(amount), className: `w-12 px-3 py-1 text-sm font-bold rounded-md ml-1 transition-colors ${lifeTechBuyAmount === amount ? 'bg-red-500 text-slate-900' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}` }, amount))
+            ),
+            React.createElement("div", { className: "space-y-4 max-w-4xl mx-auto" },
+                React.createElement("h3", { className: "text-xl font-bold mb-4 text-slate-300" }, "Life Technologies"),
+                lifeTechnologies.map(tech => React.createElement(LifeTechnologyItem, { key: tech.id, technology: tech, onBuy: onBuyLifeTechnology, lives: gameState.lives, buyAmount: lifeTechBuyAmount }))
+            )
+        )
+    );
+};
+
+const HumanSkillItem = ({ skill, onBuy, skillPoints }) => {
+    const cost = new D(skill.baseCost).mul(new D(skill.costIncreaseFactor).pow(skill.level));
+    const canAfford = skillPoints.gte(cost);
+    const isMaxLevel = skill.maxLevel && skill.level >= skill.maxLevel;
+
+    return React.createElement("div", { className: `bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center space-x-4 transition-all duration-300 ${isMaxLevel ? 'border-green-500' : 'hover:border-pink-500'}` },
+        React.createElement("div", { className: "flex-shrink-0" }, skill.icon),
+        React.createElement("div", { className: "flex-grow" },
+            React.createElement("h3", { className: "text-lg font-bold text-white" }, skill.name),
+            React.createElement("p", { className: "text-sm text-slate-400" }, skill.description),
+            skill.maxLevel ? 
+                React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", formatNumber(skill.level), " / ", skill.maxLevel) :
+                React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", formatNumber(skill.level))
+        ),
+        React.createElement("button", {
+            onClick: () => onBuy(skill.id),
+            disabled: !canAfford || isMaxLevel,
+            className: `w-40 flex-shrink-0 px-4 py-2 font-bold rounded-lg transition-all duration-200 text-slate-900 ${isMaxLevel ? 'bg-green-600 cursor-not-allowed' : canAfford ? 'bg-pink-400 hover:bg-pink-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed'}`
+        },
+            isMaxLevel ? "MAX" : "Upgrade",
+            !isMaxLevel && React.createElement(React.Fragment, null, React.createElement("br"), React.createElement("span", { className: "font-mono" }, formatNumber(cost), " SP"))
+        )
+    );
+};
+
+const BulkAssignButton = React.memo(({ text, amount, disabled, genId, onClick }) => {
+    const isDisabled = disabled || amount === 0;
+    return React.createElement("button", { onClick: () => onClick(genId, amount), disabled: isDisabled, className: `px-2 py-1 text-xs font-bold rounded-md bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:text-slate-500 disabled:cursor-not-allowed transition-colors` }, text);
+});
+
+const HumansTab = ({ gameState, onAssignHuman, onBuySkill, humanBonusPerHuman }) => {
+    const [humanSubTab, setHumanSubTab] = useState('assign');
+    const assignedHumansCount = Object.values(gameState.humans.assigned).reduce((sum, count) => sum + count, 0);
+    const availableHumans = gameState.humans.total - assignedHumansCount;
+
+    return React.createElement("div", { className: "mt-4" },
+        React.createElement("div", { className: "text-center mb-6" },
+            React.createElement("h2", { className: "text-3xl font-bold mb-2 flex items-center justify-center gap-3 text-slate-300" }, React.createElement(HumanIcon, { className: "w-8 h-8 text-green-300" }), "Humans"),
+            React.createElement("p", { className: "text-slate-400 max-w-2xl mx-auto" }, "Assign Humans to boost production or spend Skill Points on powerful permanent upgrades."),
+            React.createElement("div", { className: "mt-4 font-mono text-lg flex justify-center gap-6" },
+                React.createElement("div", null, "Available: ", React.createElement("span", { className: "text-green-400" }, formatNumber(availableHumans))),
+                React.createElement("div", null, "Total: ", React.createElement("span", { className: "text-slate-300" }, formatNumber(gameState.humans.total))),
+                React.createElement("div", null, "Skill Points: ", React.createElement("span", { className: "text-pink-400" }, formatNumber(gameState.skillPoints)))
+            )
+        ),
+        React.createElement("div", { className: "mb-6 flex justify-center border-b border-slate-700" },
+            React.createElement("button", { onClick: () => setHumanSubTab('assign'), className: `px-6 py-2 text-lg font-semibold border-b-2 transition-colors ${humanSubTab === 'assign' ? 'border-green-400 text-green-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Assign"),
+            React.createElement("button", { onClick: () => setHumanSubTab('skills'), className: `px-6 py-2 text-lg font-semibold border-b-2 transition-colors ${humanSubTab === 'skills' ? 'border-pink-400 text-pink-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Skills")
+        ),
+        humanSubTab === 'assign' && React.createElement("div", { className: "space-y-4 max-w-4xl mx-auto" },
+            gameState.generators.map(gen => {
+                const assignedCount = gameState.humans.assigned[gen.id] || 0;
+                const bonus = assignedCount * humanBonusPerHuman * 100;
+                return React.createElement("div", { key: gen.id, className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex flex-col sm:flex-row items-center space-y-3 sm:space-y-0 sm:space-x-4" },
+                    React.createElement("div", { className: "flex-shrink-0" }, gen.icon),
+                    React.createElement("div", { className: "flex-grow text-center sm:text-left" },
+                        React.createElement("h3", { className: "text-lg font-bold text-white" }, gen.name),
+                        React.createElement("p", { className: "text-sm text-slate-400" }, "Current Bonus: ", React.createElement("span", { className: "font-bold text-green-400" }, "+", formatNumber(bonus), "%"))
+                    ),
+                    React.createElement("div", { className: "flex items-center gap-1 flex-wrap justify-center" },
+                        React.createElement(BulkAssignButton, { text: "-All", genId: gen.id, amount: -assignedCount, disabled: assignedCount === 0, onClick: onAssignHuman }),
+                        React.createElement(BulkAssignButton, { text: "-10%", genId: gen.id, amount: -Math.max(1, Math.floor(assignedCount * 0.1)), disabled: assignedCount === 0, onClick: onAssignHuman }),
+                        React.createElement("button", { onClick: () => onAssignHuman(gen.id, -1), disabled: assignedCount === 0, className: "w-8 h-8 font-bold text-lg rounded-md bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:cursor-not-allowed transition-colors" }, "-"),
+
+                        React.createElement("span", { className: "w-20 text-center text-xl font-bold" }, formatNumber(assignedCount)),
+                        React.createElement("button", { onClick: () => onAssignHuman(gen.id, 1), disabled: availableHumans <= 0, className: "w-8 h-8 font-bold text-lg rounded-md bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:cursor-not-allowed transition-colors" }, "+"),
+                        React.createElement(BulkAssignButton, { text: "+10%", genId: gen.id, amount: Math.max(1, Math.floor(availableHumans * 0.1)), disabled: availableHumans <= 0, onClick: onAssignHuman }),
+                        React.createElement(BulkAssignButton, { text: "+All", genId: gen.id, amount: availableHumans, disabled: availableHumans <= 0, onClick: onAssignHuman })
+                    )
+                )
+            })
+        ),
+        humanSubTab === 'skills' && React.createElement("div", { className: "space-y-4 max-w-4xl mx-auto" },
+            gameState.humanSkills.map(skill => React.createElement(HumanSkillItem, { key: skill.id, skill: skill, onBuy: onBuySkill, skillPoints: gameState.skillPoints }))
+        )
+    );
+};
+
+const PrestigeSkillItem = ({ skill, onBuy, prestigePoints, buyAmount }) => {
+    const isAlreadyMaxLevel = skill.maxLevel !== undefined && skill.level >= skill.maxLevel;
+    const amountToBuy = useMemo(() => {
+      if (isAlreadyMaxLevel) return 0;
+      let desiredAmount = buyAmount === 'MAX' ? calculateMaxAffordable({ ...skill, count: skill.level }, prestigePoints) : buyAmount;
+      if (skill.maxLevel !== undefined) return Math.min(desiredAmount, skill.maxLevel - skill.level);
+      return desiredAmount;
+    }, [buyAmount, skill, prestigePoints, isAlreadyMaxLevel]);
+  
+    const cost = useMemo(() => {
+      if (amountToBuy <= 0) return new D(0);
+      return calculatePurchaseCost({ ...skill, count: skill.level }, amountToBuy);
+    }, [skill, amountToBuy]);
+  
+    const displayCost = useMemo(() => {
+        if (buyAmount === 'MAX' && amountToBuy === 0 && !isAlreadyMaxLevel) return calculatePurchaseCost({ ...skill, count: skill.level }, 1);
+        return cost;
+    }, [buyAmount, amountToBuy, cost, skill, isAlreadyMaxLevel]);
+
+    const canAfford = prestigePoints.gte(cost) && amountToBuy > 0;
+    const isMaxed = skill.maxLevel && skill.level >= skill.maxLevel;
+
+    return React.createElement("div", { className: `bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center space-x-4 transition-all duration-300 ${isMaxed ? 'border-green-500' : 'hover:border-yellow-500'}` },
+        React.createElement("div", { className: "flex-shrink-0" }, skill.icon),
+        React.createElement("div", { className: "flex-grow" },
+            React.createElement("h3", { className: "text-lg font-bold text-white" }, skill.name),
+            React.createElement("p", { className: "text-sm text-slate-400" }, skill.description),
+            skill.maxLevel ? 
+                React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", formatNumber(skill.level), " / ", skill.maxLevel) :
+                React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", formatNumber(skill.level))
+        ),
+        React.createElement("button", {
+            onClick: () => onBuy(skill.id, amountToBuy),
+            disabled: !canAfford || isMaxed,
+            className: `w-40 flex-shrink-0 px-4 py-2 font-bold rounded-lg transition-all duration-200 text-slate-900 ${isMaxed ? 'bg-green-600 cursor-not-allowed' : canAfford ? 'bg-yellow-400 hover:bg-yellow-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed'}`
+        },
+            isMaxed ? "MAX" : (amountToBuy > 1 ? `Upgrade x${formatNumber(amountToBuy)}` : "Upgrade"),
+            !isMaxed && React.createElement(React.Fragment, null, React.createElement("br"), React.createElement("span", { className: "font-mono" }, formatNumber(displayCost), " PP"))
+        )
+    );
+};
+
+const PrestigeTab = ({ gameState, onPrestige, onBuyPrestigeSkill, prestigeSkillBuyAmount, setPrestigeSkillBuyAmount, prestigeSkillBonus, researchCostReduction }) => {
+    return React.createElement('div', { className: 'max-w-4xl mx-auto' },
+        React.createElement(PrestigeDisplay, { 
+            atoms: gameState.atoms, 
+            prestigePoints: gameState.prestigePoints, 
+            onPrestige: onPrestige, 
+            prestigeRequirement: PRESTIGE_REQUIREMENT, 
+            research: gameState.research, 
+            prestigeSkillBonus: prestigeSkillBonus 
+        }),
+        React.createElement('div', { className: 'mt-8' },
+            React.createElement('h2', { className: 'text-2xl font-bold mb-4 flex items-center gap-2 text-slate-300' }, 
+                React.createElement(UpgradeIcon, { className: 'w-6 h-6 text-yellow-300' }), 
+                'Prestige Skills'
+            ),
+             React.createElement("div", { className: "flex justify-center items-center mb-4" },
+                React.createElement("span", { className: "text-slate-400 mr-2 text-sm" }, "Buy:"),
+                [1, 5, 10, 50, 'MAX'].map((amount) => React.createElement("button", { key: amount.toString(), onClick: () => setPrestigeSkillBuyAmount(amount), className: `w-12 px-3 py-1 text-sm font-bold rounded-md ml-1 transition-colors ${prestigeSkillBuyAmount === amount ? 'bg-yellow-500 text-slate-900' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}` }, amount))
+            ),
+            React.createElement('div', { className: 'space-y-3' }, 
+                gameState.prestigeSkills.map(skill => React.createElement(PrestigeSkillItem, { 
+                    key: skill.id, 
+                    skill: skill, 
+                    onBuy: onBuyPrestigeSkill, 
+                    prestigePoints: gameState.prestigePoints,
+                    buyAmount: prestigeSkillBuyAmount
+                }))
+            )
+        )
+    );
+};
+
+
+const LifeTechnologyItem = ({ technology, onBuy, lives, buyAmount }) => {
+    const isAlreadyMaxLevel = technology.maxLevel !== undefined && technology.level >= technology.maxLevel;
+    const amountToBuy = useMemo(() => {
+      if (isAlreadyMaxLevel) return 0;
+      let desiredAmount = buyAmount === 'MAX' ? calculateMaxAffordable({ ...technology, count: technology.level }, lives) : buyAmount;
+      if (technology.maxLevel !== undefined) return Math.min(desiredAmount, technology.maxLevel - technology.level);
+      return desiredAmount;
+    }, [buyAmount, technology, lives, isAlreadyMaxLevel]);
+  
+    const cost = useMemo(() => {
+      if (amountToBuy <= 0) return new D(0);
+      return calculatePurchaseCost({ ...technology, count: technology.level }, amountToBuy);
+    }, [technology, amountToBuy]);
+  
+    const displayCost = useMemo(() => {
+        if (buyAmount === 'MAX' && amountToBuy === 0 && !isAlreadyMaxLevel) return calculatePurchaseCost({ ...technology, count: technology.level }, 1);
+        return cost;
+    }, [buyAmount, amountToBuy, cost, technology, isAlreadyMaxLevel]);
+
+    const canAfford = lives.gte(cost) && amountToBuy > 0;
+    const isMaxed = technology.maxLevel && technology.level >= technology.maxLevel;
+
+    return React.createElement("div", { className: `bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center space-x-4 transition-all duration-300 ${isMaxed ? 'border-green-500' : 'hover:border-red-500'}` },
+        React.createElement("div", { className: "flex-shrink-0" }, technology.icon),
+        React.createElement("div", { className: "flex-grow" },
+            React.createElement("h3", { className: "text-lg font-bold text-white" }, technology.name),
+            React.createElement("p", { className: "text-sm text-slate-400" }, technology.description),
+            technology.maxLevel ? 
+                React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", formatNumber(technology.level), " / ", technology.maxLevel) :
+                React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", formatNumber(technology.level))
+        ),
+        React.createElement("button", {
+            onClick: () => onBuy(technology.id, amountToBuy),
+            disabled: !canAfford || isMaxed,
+            className: `w-40 flex-shrink-0 px-4 py-2 font-bold rounded-lg transition-all duration-200 text-slate-900 ${isMaxed ? 'bg-green-600 cursor-not-allowed' : canAfford ? 'bg-red-400 hover:bg-red-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed'}`
+        },
+            isMaxed ? "MAX" : (amountToBuy > 1 ? `Upgrade x${formatNumber(amountToBuy)}` : "Upgrade"),
+            !isMaxed && React.createElement(React.Fragment, null, React.createElement("br"), React.createElement("span", { className: "font-mono" }, formatNumber(displayCost), " Lives"))
+        )
+    );
+};
+
+const SuperHumanSkillItem = ({ skill, onBuy, artificialIngenuity }) => {
+    const cost = new D(skill.baseCost).mul(new D(skill.costIncreaseFactor).pow(skill.level));
+    const canAfford = artificialIngenuity.gte(cost);
+    const isMaxLevel = skill.maxLevel && skill.level >= skill.maxLevel;
+
+    return React.createElement("div", { className: `bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center space-x-4 transition-all duration-300 ${isMaxLevel ? 'border-green-500' : 'hover:border-sky-500'}` },
+        React.createElement("div", { className: "flex-shrink-0" }, skill.icon),
+        React.createElement("div", { className: "flex-grow" },
+            React.createElement("h3", { className: "text-lg font-bold text-white" }, skill.name),
+            React.createElement("p", { className: "text-sm text-slate-400" }, skill.description),
+            skill.maxLevel ? 
+                React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", formatNumber(skill.level), " / ", skill.maxLevel) :
+                React.createElement("p", { className: "text-xs text-slate-500" }, "Level: ", formatNumber(skill.level))
+        ),
+        React.createElement("button", {
+            onClick: () => onBuy(skill.id),
+            disabled: !canAfford || isMaxLevel,
+            className: `w-40 flex-shrink-0 px-4 py-2 font-bold rounded-lg transition-all duration-200 text-slate-900 ${isMaxLevel ? 'bg-green-600 cursor-not-allowed' : canAfford ? 'bg-sky-400 hover:bg-sky-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed'}`
+        },
+            isMaxLevel ? "MAX" : "Upgrade",
+            !isMaxLevel && React.createElement(React.Fragment, null, React.createElement("br"), React.createElement("span", { className: "font-mono" }, formatNumber(cost), " AI"))
+        )
+    );
+};
+
+const SuperHumansTab = ({ gameState, onAscend, onBuySkill, artificialIngenuityPerSecond, onAssignSuperHuman }) => {
+        const [superHumanSubTab, setSuperHumanSubTab] = useState('ascension'); 
+    
+        const superHumansOnAscension = useMemo(() => {
+            const item = {
+                baseCost: SUPER_HUMAN_UNLOCK_REQUIREMENT,
+                costIncreaseFactor: SUPER_HUMAN_COST_INCREASE_FACTOR,
+                count: gameState.superHumans
+            };
+            return calculateMaxAffordable(item, gameState.humans.total);
+        }, [gameState.humans.total, gameState.superHumans]);
+
+        const costForAscension = useMemo(() => {
+            const item = {
+                baseCost: SUPER_HUMAN_UNLOCK_REQUIREMENT,
+                costIncreaseFactor: SUPER_HUMAN_COST_INCREASE_FACTOR,
+                count: gameState.superHumans
+            };
+            const amountToCalc = superHumansOnAscension > 0 ? superHumansOnAscension : 1;
+            return calculatePurchaseCost(item, amountToCalc);
+        }, [superHumansOnAscension, gameState.superHumans]);
+
+        const canAscend = superHumansOnAscension > 0;
+        const nextSuperHumanCost = SUPER_HUMAN_UNLOCK_REQUIREMENT.mul(new D(SUPER_HUMAN_COST_INCREASE_FACTOR).pow(gameState.superHumans));
+
+    return React.createElement("div", { className: "mt-4" },
+        React.createElement("div", { className: "text-center mb-6" },
+            React.createElement("h2", { className: "text-3xl font-bold mb-2 flex items-center justify-center gap-3 text-slate-300" }, React.createElement(SuperHumanIcon, { className: "w-8 h-8 text-sky-300" }), "Super Humans"),
+            React.createElement("p", { className: "text-slate-400 max-w-2xl mx-auto" }, "Transcend humanity to gain Super Humans. This is the ultimate reset, erasing all prior progress in exchange for immense power."),
+             React.createElement("div", { className: "mt-4 font-mono text-lg flex justify-center gap-6" },
+                React.createElement("div", null, "Super Humans: ", React.createElement("span", { className: "text-sky-400" }, formatNumber(gameState.superHumans))),
+                React.createElement("div", null, "Ingenuity: ", React.createElement("span", { className: "text-purple-400" }, formatNumber(gameState.artificialIngenuity))),
+                React.createElement("div", null, "AI/sec: ", React.createElement("span", { className: "text-purple-400" }, formatNumber(artificialIngenuityPerSecond)))
+            )
+        ),
+        React.createElement("div", { className: "mb-6 flex justify-center border-b border-slate-700" },
+            React.createElement("button", { onClick: () => setSuperHumanSubTab('ascension'), className: `px-6 py-2 text-lg font-semibold border-b-2 transition-colors ${superHumanSubTab === 'ascension' ? 'border-sky-400 text-sky-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Ascension"),
+            React.createElement("button", { onClick: () => setSuperHumanSubTab('skills'), className: `px-6 py-2 text-lg font-semibold border-b-2 transition-colors ${superHumanSubTab === 'skills' ? 'border-purple-400 text-purple-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Skills")
+        ),
+        
+        superHumanSubTab === 'ascension' && React.createElement(React.Fragment, null,
+            React.createElement("div", { className: "mb-8" }, 
+                React.createElement("div", { className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex flex-col md:flex-row items-center justify-between gap-4 max-w-4xl mx-auto" },
+                    React.createElement("div", null,
+                        React.createElement("p", { className: "text-slate-300 text-lg font-bold" }, "Ascend to a new state of being."),
+                        React.createElement("p", { className: "text-slate-400 text-sm" }, "This will reset EVERYTHING except for Super Humans and their skills."),
+                    ),
+                    React.createElement("button", { onClick: () => onAscend(superHumansOnAscension), disabled: !canAscend, className: `px-6 py-3 font-bold rounded-lg transition-all duration-200 text-slate-900 ${ canAscend ? 'bg-sky-400 hover:bg-sky-300 active:scale-95' : 'bg-slate-600 cursor-not-allowed' }`},
+                        React.createElement("div", null, "Ascend for +", formatNumber(superHumansOnAscension), " Super Humans"),
+                        React.createElement("div", { className: "text-xs font-normal" }, "Cost: ", formatNumber(costForAscension), " Humans")
+                    )
+                )
+            ),
+            React.createElement("div", { className: "space-y-4 max-w-4xl mx-auto" },
+                React.createElement("h3", { className: "text-xl font-bold mb-2 text-sky-300" }, "Assign Super Humans to Infinite Projects"),
+                React.createElement("div", { className: "mb-4 text-sm text-sky-200 bg-slate-800/70 rounded-lg p-3 border border-sky-700" },
+                    "Each Super Human assigned increases the Infinite Project bonus by 50%. ",
+                    React.createElement("br"),
+                    "If at least 1 Super Human is assigned to ",
+                    React.createElement("span", { className: "font-bold text-cyan-300" }, "Infinite Atom Drive"),
+                    ", atom gain is boosted by 200%. ",
+                    React.createElement("br"),
+                    "If at least 1 Super Human is assigned to ",
+                    React.createElement("span", { className: "font-bold text-purple-300" }, "Endless Knowledge"),
+                    ", Skill Point gain is boosted by 100%."
+                ),
+                INFINITE_PROJECTS.map(proj => {
+                    const assigned = gameState.superHumansAssigned?.[proj.id] || 0;
+                    const assignedCount = Object.values(gameState.superHumansAssigned || {}).reduce((sum, c) => sum + c, 0);
+                    const available = gameState.superHumans - assignedCount;
+                    return React.createElement("div", { key: proj.id, className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex flex-col sm:flex-row items-center space-y-3 sm:space-y-0 sm:space-x-4 mb-2" },
+                        React.createElement("div", { className: "flex-shrink-0" }, proj.icon),
+                        React.createElement("div", { className: "flex-grow text-center sm:text-left" },
+                            React.createElement("h3", { className: "text-lg font-bold text-white" }, proj.name),
+                            React.createElement("p", { className: "text-sm text-slate-400" }, proj.description)
+                        ),
+                        React.createElement("div", { className: "flex items-center gap-1 flex-wrap justify-center" },
+                            React.createElement(BulkAssignButton, { text: "-All", genId: proj.id, amount: -assigned, disabled: assigned === 0, onClick: onAssignSuperHuman }),
+                            React.createElement(BulkAssignButton, { text: "-10%", genId: proj.id, amount: -Math.max(1, Math.floor(assigned * 0.1)), disabled: assigned === 0, onClick: onAssignSuperHuman }),
+                            React.createElement("button", { onClick: () => onAssignSuperHuman(proj.id, -1), disabled: assigned === 0, className: "w-8 h-8 font-bold text-lg rounded-md bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:cursor-not-allowed transition-colors" }, "-"),
+                            React.createElement("span", { className: "w-20 text-center text-xl font-bold" }, formatNumber(assigned)),
+                            React.createElement("button", { onClick: () => onAssignSuperHuman(proj.id, 1), disabled: available <= 0, className: "w-8 h-8 font-bold text-lg rounded-md bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:cursor-not-allowed transition-colors" }, "+"),
+                            React.createElement(BulkAssignButton, { text: "+10%", genId: proj.id, amount: Math.max(1, Math.floor(available * 0.1)), disabled: available <= 0, onClick: onAssignSuperHuman }),
+                            React.createElement(BulkAssignButton, { text: "+All", genId: proj.id, amount: available, disabled: available <= 0, onClick: onAssignSuperHuman })
+                        )
+                    );
+                })
+            )
+        ),
+
+        superHumanSubTab === 'skills' && React.createElement("div", { className: "space-y-4 max-w-4xl mx-auto" },
+            gameState.superHumanSkills.map(skill => React.createElement(SuperHumanSkillItem, { 
+                key: skill.id, 
+                skill: skill, 
+                onBuy: onBuySkill, 
+                artificialIngenuity: gameState.artificialIngenuity 
+            }))
+        )
+    );
+};
+
+const GuideTab = () => {
+    const guideData = [
+        {
+            title: 'Prestige',
+            icon: React.createElement(PrestigeIcon, { className: "w-8 h-8 text-yellow-300" }),
+            requirement: `Requires ${formatNumber(PRESTIGE_REQUIREMENT)} Atoms.`,
+            unlocks: 'Unlocks the Prestige and Research tabs, allowing you to earn Prestige Points that permanently boost your production and purchase unique upgrades (softcaps at 1AA PP)'
+        },
+        {
+            title: 'Lives & Subjects',
+            icon: React.createElement(LifeIcon, { className: "w-8 h-8 text-red-300" }),
+            requirement: `Requires ${formatNumber(SUBJECTS_UNLOCK_REQUIREMENT)} Atoms.`,
+            unlocks: 'Unlocks the Subjects tab. Subjects generate Lives, a new resource that provides a massive bonus to atom production.'
+        },
+        {
+            title: 'Humans',
+            icon: React.createElement(HumanIcon, { className: "w-8 h-8 text-green-300" }),
+            requirement: `Requires ${formatNumber(HUMANS_UNLOCK_REQUIREMENT)} Lives.`,
+            unlocks: 'Unlocks the Humans tab and Human Ascension. Sacrifice your progress to gain Humans, which can be assigned to generators or generate Skill Points for permanent upgrades.'
+        },
+        {
+            title: 'Super Humans',
+            icon: React.createElement(SuperHumanIcon, { className: "w-8 h-8 text-sky-300" }),
+            requirement: `Requires ${formatNumber(SUPER_HUMAN_UNLOCK_REQUIREMENT)} Humans.`,
+            unlocks: 'Unlocks the Super Humans tab, the ultimate reset. Sacrifice all your progress (including Humans) to gain Super Humans, who provide immense power and unlock their own skill tree.'
+        },
+        {
+            title: '?????????????',
+            icon: React.createElement(UniverseIcon, { className: "w-8 h-8 text-purple-300" }),
+            requirement: 'Requires 10 Super Humans.',
+            unlocks: '???V???E???R???Y??????S???O???O???N???'
+        },
+    ];
+
+    return React.createElement("div", { className: "mt-4 max-w-4xl mx-auto" },
+        React.createElement("div", { className: "text-center mb-8" },
+            React.createElement("h2", { className: "text-3xl font-bold mb-2 flex items-center justify-center gap-3 text-emerald-400" }, 
+                React.createElement(GuideIcon, { className: "w-8 h-8" }), 
+                "Progress Guide"
+            ),
+            React.createElement("p", { className: "text-slate-400" }, "Here you'll find the requirements to unlock the main mechanics and tabs of the game.")
+        ),
+        React.createElement("div", { className: "space-y-4" },
+            guideData.map(item => React.createElement("div", { key: item.title, className: "bg-slate-800/60 p-5 rounded-lg border border-slate-700" },
+                React.createElement("div", { className: "flex items-center gap-4 mb-2" },
+                    item.icon,
+                    React.createElement("h3", { className: "text-2xl font-bold text-slate-100" }, item.title)
+                ),
+                React.createElement("p", { className: "text-md text-slate-300 font-semibold ml-12" }, item.requirement),
+                React.createElement("p", { className: "text-sm text-slate-400 mt-1 ml-12" }, item.unlocks)
+            ))
+        )
+    );
+};
+
+const getInitialGameState = () => ({
+  atoms: new D(1),
+  prestigePoints: new D(0),  
+  generators: INITIAL_GENERATORS.map(g => ({ ...g, count: 0 })),
+  upgrades: INITIAL_UPGRADES.map(u => ({ ...u, level: 0 })),
+  research: RESEARCH_TREE.map(r => ({ ...r, dependencies: [...r.dependencies], isPurchased: false })),
+  lives: new D(0),
+  subjects: INITIAL_SUBJECTS.map(s => ({ ...s, count: 0 })),
+  subjectsUnlocked: false,
+  humans: { total: 0, assigned: {} },
+  humansUnlocked: false,
+  skillPoints: new D(0),
+  humanSkills: HUMAN_SKILLS.map(s => ({...s, level: 0})),
+  infiniteProjects: INFINITE_PROJECTS.map(p => ({...p, level: 0})),
+  prestigeSkills: INITIAL_PRESTIGE_SKILLS.map(s => ({...s, level: 0})),
+  lifeTechnologies: INITIAL_LIFE_TECHNOLOGIES.map(t => ({...t, level: 0})),
+  autoBuyGenerators: false,
+  autoBuyUpgrades: false,
+  superHumans: 0,
+  superHumansAssigned: {},
+  artificialIngenuity: new D(0),
+  superHumansUnlocked: false,
+  superHumanSkills: INITIAL_SUPER_HUMAN_SKILLS.map(s => ({...s, level: 0})),
+});
+
+const App = () => {
+  const [gameState, setGameState] = useState(() => {
+    const savedState = localStorage.getItem('atomIdleGameState');
+    if (savedState) {
+        try {
+            const parsed = JSON.parse(savedState);
+            const initialState = getInitialGameState();
+
+            const upgrades = INITIAL_UPGRADES.map(u => {
+                const saved = parsed.upgrades?.find(su => su.id === u.id);
+                let level = saved?.level || 0;
+                if (u.maxLevel !== undefined && level > u.maxLevel) level = u.maxLevel;
+                return { ...u, level };
+            });
+
+            const humanSkills = HUMAN_SKILLS.map(s => {
+                const saved = parsed.humanSkills?.find(hs => hs.id === s.id);
+                let level = saved?.level || 0;
+                if (s.maxLevel !== undefined && level > s.maxLevel) level = s.maxLevel;
+                return { ...s, level };
+            });
+
+            const prestigeSkills = INITIAL_PRESTIGE_SKILLS.map(s => {
+                const saved = parsed.prestigeSkills?.find(ps => ps.id === s.id);
+                let level = saved?.level || 0;
+                if (s.maxLevel !== undefined && level > s.maxLevel) level = s.maxLevel;
+                return { ...s, level };
+            });
+
+            const lifeTechnologies = INITIAL_LIFE_TECHNOLOGIES.map(t => {
+                const saved = parsed.lifeTechnologies?.find(lt => lt.id === t.id);
+                let level = saved?.level || 0;
+                if (t.maxLevel !== undefined && level > t.maxLevel) level = t.maxLevel;
+                return { ...t, level };
+            });
+
+            const superHumanSkills = INITIAL_SUPER_HUMAN_SKILLS.map(s => {
+                const saved = parsed.superHumanSkills?.find(shs => shs.id === s.id);
+                let level = saved?.level || 0;
+                if (s.maxLevel !== undefined && level > s.maxLevel) level = s.maxLevel;
+                return { ...s, level };
+            });
+
+            const rehydratedState = {
+                ...initialState,
+                atoms: new D(parsed.atoms || 1),
+                prestigePoints: new D(parsed.prestigePoints || 0),
+                lives: new D(parsed.lives || 0),
+                subjectsUnlocked: parsed.subjectsUnlocked || false,
+                humans: parsed.humans || { total: 0, assigned: {} },
+                humansUnlocked: parsed.humansUnlocked || false,
+                skillPoints: new D(parsed.skillPoints || 0),
+                generators: INITIAL_GENERATORS.map(g => ({ ...g, count: parsed.generators?.find(sg => sg.id === g.id)?.count || 0 })),
+                upgrades,
+                research: RESEARCH_TREE.map(r => ({ ...r, dependencies: [...r.dependencies], isPurchased: parsed.research?.find(sr => sr.id === r.id)?.isPurchased || false })),
+                subjects: INITIAL_SUBJECTS.map(s => ({ ...s, count: parsed.subjects?.find(ss => ss.id === s.id)?.count || 0 })),
+                humanSkills,
+                infiniteProjects: INFINITE_PROJECTS.map(p => ({ ...p, level: parsed.infiniteProjects?.find(ip => ip.id === p.id)?.level || 0 })),
+                prestigeSkills,
+                lifeTechnologies,
+                autoBuyGenerators: parsed.autoBuyGenerators || false,
+                autoBuyUpgrades: parsed.autoBuyUpgrades || false,
+                superHumans: parsed.superHumans || 0,
+                superHumansAssigned: parsed.superHumansAssigned || {},
+                artificialIngenuity: new D(parsed.artificialIngenuity || 0),
+                superHumansUnlocked: parsed.superHumansUnlocked || false,
+                superHumanSkills,
+            };
+            return rehydratedState;
+        } catch (e) { console.error("Failed to parse saved state:", e); }
+    }
+    return getInitialGameState();
+  });
+  
+  const [buyAmount, setBuyAmount] = useState(1);
+  const [upgradeBuyAmount, setUpgradeBuyAmount] = useState(1);
+  const [subjectBuyAmount, setSubjectBuyAmount] = useState(1);
+  const [prestigeSkillBuyAmount, setPrestigeSkillBuyAmount] = useState(1); 
+  const [lifeTechBuyAmount, setLifeTechBuyAmount] = useState(1);
+  const [activeTab, setActiveTab] = useState('main');
+
+  const gameStateRef = useRef(gameState);
+  useEffect(() => { gameStateRef.current = gameState; }, [gameState]);
+
+  const lastTickTimeRef = useRef(Date.now());
+
+  const getEffectiveGenerators = useCallback((state) => {
+    const hs2Level = state.humanSkills.find(s => s.id === 'hs2')?.level || 0;
+    const generatorCostMultiplier = Math.max(0.001, 1 - (hs2Level * 0.05));
+    return state.generators.map(g => ({...g, baseCost: new D(g.baseCost).mul(generatorCostMultiplier)}));
+  }, []);
+
+  const getEffectiveUpgrades = useCallback((state) => {
+    return state.upgrades.map(upg => {
+        let modifiedUpg = { ...upg };
+        if (upg.id === 'upg2' && state.research.find(r => r.id === 'res5')?.isPurchased) {
+            const supernovaForgeCount = state.generators.find(g => g.id === 'gen4')?.count || 0;
+            modifiedUpg.maxLevel = (INITIAL_UPGRADES.find(u => u.id === 'upg2')?.maxLevel || 10) + Math.floor(supernovaForgeCount / 50) * 5;
+        }
+        if (upg.id === 'upg4' && state.research.find(r => r.id === 'res7')?.isPurchased) {
+            const subjectA01Count = state.subjects.find(s => s.id === 'sub1')?.count || 0;
+            modifiedUpg.maxLevel = (INITIAL_UPGRADES.find(u => u.id === 'upg4')?.maxLevel || 10) + Math.floor(subjectA01Count / 10) * 5;
+        }
+        if (upg.id === 'upg4') {
+            const lt3Level = state.lifeTechnologies.find(t => t.id === 'lt3')?.level || 0;
+            const initialEffect = INITIAL_UPGRADES.find(u => u.id === 'upg4').effect();
+            modifiedUpg.effect = () => initialEffect * (1 + lt3Level * 0.02);
+        }
+        if (upg.id === 'upg5') {
+            const lt2Level = state.lifeTechnologies.find(t => t.id === 'lt2')?.level || 0;
+            const initialEffect = INITIAL_UPGRADES.find(u => u.id === 'upg5').effect();
+            modifiedUpg.effect = () => initialEffect * (1 + lt2Level * 0.1);
+        }
+        return modifiedUpg;
+    }).filter(upg => upg.unlockCondition ? upg.unlockCondition(state) : true);
+  }, []);
+
+  const artificialIngenuityPerSecond = useMemo(() => {
+    const skillBonus = new D(1).add(new D(gameState.superHumanSkills.find(s => s.id === 'shs1')?.level || 0).mul(0.1));
+    return new D(gameState.superHumans).mul(ARTIFICIAL_INGENUITY_PER_SUPER_HUMAN_PER_SECOND).mul(skillBonus);
+  }, [gameState.superHumans, gameState.superHumanSkills]);
+
+  const skillPointGenerationRate = useMemo(() => {
+      const ip2Level = gameState.infiniteProjects.find(p => p.id === 'ip2')?.level || 0;
+      const ip2Bonus = new D(1).add(new D(ip2Level).mul(0.1));
+      
+      const superHumansIp2 = gameState.superHumansAssigned?.ip2 || 0;
+      const superHumanSkillBonus = new D(1).add(new D(gameState.superHumanSkills.find(s => s.id === 'shs4')?.level || 0).mul(0.5));
+      const ip2Special = superHumansIp2 > 0 ? 2 : 1;
+      
+      return new D(gameState.humans.total).mul(HUMAN_SKILL_POINTS_PER_SECOND_PER_HUMAN).mul(ip2Bonus).mul(superHumanSkillBonus).mul(ip2Special);
+  }, [gameState.humans.total, gameState.infiniteProjects, gameState.superHumansAssigned, gameState.superHumanSkills]);
+
+    const effectiveUpgrades = useMemo(() => {
+        return getEffectiveUpgrades(gameState);
+    }, [gameState, getEffectiveUpgrades]);
+
+  const lifeProductionMultiplier = useMemo(() => {
+    const lifeUpgrade = effectiveUpgrades.find(u => u.id === 'upg4');
+    let lifeMultiplier = new D(1);
+    
+    if (lifeUpgrade && lifeUpgrade.level > 0) {
+        lifeMultiplier = new D(lifeUpgrade.effect()).pow(lifeUpgrade.level);
+    }
+    
+    const skillBonus = new D(1).add(new D(gameState.humanSkills.find(s => s.id === 'hs3')?.level || 0).mul(0.01));
+    const lt1Bonus = new D(1).add(new D(gameState.lifeTechnologies.find(t => t.id === 'lt1')?.level || 0).mul(0.1));
+    
+    return lifeMultiplier.mul(skillBonus).mul(lt1Bonus);
+  }, [effectiveUpgrades, gameState.humanSkills, gameState.lifeTechnologies]);
+
+  const livesPerSecond = useMemo(() => {
+    let baseLifeProduction = gameState.subjects.reduce((total, sub) => total.add(new D(sub.baseLifeProduction).mul(sub.count)), new D(0));
+    return baseLifeProduction.mul(lifeProductionMultiplier);
+  }, [gameState.subjects, lifeProductionMultiplier]);
+  
+  const humanBonusPerHuman = useMemo(() => {
+      const humanIngenuityBonus = new D(gameState.humanSkills.find(s => s.id === 'hs1')?.level || 0).mul(0.01);
+      const cosmicArchitectsBonus = new D(gameState.superHumanSkills.find(s => s.id === 'shs3')?.level || 0).mul(0.01);
+      return new D(HUMAN_GENERATOR_BONUS_PER_HUMAN).add(humanIngenuityBonus).add(cosmicArchitectsBonus);
+  }, [gameState.humanSkills, gameState.superHumanSkills]);
+
+  const { totalGlobalMultiplier, prestigeBonus, researchMultiplier, lifeBonus, infiniteProjectBonus, ip1Special, specificGeneratorMultipliers, prestigeSkillBonus, researchCostReduction } = useMemo(() => {
+    const globalMultiplier = effectiveUpgrades
+        .filter(upg => !upg.appliesToGenerator && upg.level > 0 && upg.id !== 'upg4' && upg.id !== 'upg5')
+        .reduce((multiplier, upg) => multiplier.mul(new D(upg.effect()).pow(upg.level)), new D(1));
+
+    const prestigeBonusPerPoint = gameState.research.find(r => r.id === 'res3' && r.isPurchased) ? new D(0.015) : new D(0.01);
+    const prestigeBonusVal = new D(1).add(gameState.prestigePoints.mul(prestigeBonusPerPoint));
+    
+    let researchMultiplierVal = gameState.research.find(r => r.id === 'res1' && r.isPurchased) ? new D(1.5) : new D(1);
+    
+    const lifeUpgrade = effectiveUpgrades.find(u => u.id === 'upg5');
+    const perLifeBonusBase = new D(0.1);
+    const perLifeBonusEffect = lifeUpgrade ? new D(lifeUpgrade.effect()).pow(lifeUpgrade.level) : new D(1);
+    const perLifeBonus = perLifeBonusBase.mul(perLifeBonusEffect);
+    const researchLifeBonus = gameState.research.find(r => r.id === 'res6' && r.isPurchased) ? new D(1.25) : new D(1);
+    const lifeBonusVal = new D(1).add(gameState.lives.mul(perLifeBonus).mul(researchLifeBonus));
+    
+    const superHumansIp1 = gameState.superHumansAssigned?.ip1 || 0;
+    const ip1Level = gameState.infiniteProjects.find(p => p.id === 'ip1')?.level || 0;
+    const infiniteProjectBonusVal = new D(1).add(new D(ip1Level).mul(0.1)).mul(new D(1).add(new D(0.5).mul(superHumansIp1)));
+    const ip1SpecialMultiplier = superHumansIp1 > 0 ? new D(2) : new D(1);
+
+    const specificMultipliers = {};
+    effectiveUpgrades.filter(upg => upg.appliesToGenerator && upg.level > 0).forEach(upg => {
+        specificMultipliers[upg.appliesToGenerator] = (specificMultipliers[upg.appliesToGenerator] || new D(1)).mul(new D(upg.effect()).pow(upg.level));
+    });
+
+    const ps1Bonus = new D(1).add(new D(gameState.prestigeSkills.find(s => s.id === 'ps1')?.level || 0).mul(0.1));
+    const ps2Reduction = new D(1).sub(new D(Math.min(0.99, (gameState.prestigeSkills.find(s => s.id === 'ps2')?.level || 0) * 0.01)));
+
+    return {
+        totalGlobalMultiplier: globalMultiplier,
+        prestigeBonus: prestigeBonusVal,
+        researchMultiplier: researchMultiplierVal,
+        lifeBonus: lifeBonusVal,
+        infiniteProjectBonus: infiniteProjectBonusVal,
+        ip1Special: ip1SpecialMultiplier,
+        specificGeneratorMultipliers: specificMultipliers,
+        prestigeSkillBonus: ps1Bonus,
+        researchCostReduction: ps2Reduction
+    };
+  }, [gameState, effectiveUpgrades]);
+
+  const atomsPerSecond = useMemo(() => {
+    const baseProductionFromGenerators = gameState.generators.reduce((total, gen) => {
+        let singleGeneratorProduction = new D(gen.baseProduction);
+        const specificMultiplier = specificGeneratorMultipliers[gen.id] || new D(1);
+        const assignedHumans = gameState.humans.assigned[gen.id] || 0;
+        const humanBonusMultiplier = new D(1).add(new D(assignedHumans).mul(humanBonusPerHuman));
+
+        let gen2Boost = new D(1);
+        if(gen.id === 'gen2') {
+            const gen2Skill = gameState.superHumanSkills.find(s => s.id === 'shs2');
+            if(gen2Skill) {
+                gen2Boost = new D(6).pow(gen2Skill.level);
+            }
+        }
+        
+        singleGeneratorProduction = singleGeneratorProduction.mul(specificMultiplier).mul(humanBonusMultiplier).mul(gen2Boost);
+        return total.add(singleGeneratorProduction.mul(gen.count));
+    }, new D(0));
+    
+    return baseProductionFromGenerators.mul(totalGlobalMultiplier).mul(prestigeBonus).mul(researchMultiplier).mul(lifeBonus).mul(infiniteProjectBonus).mul(ip1Special);
+}, [gameState.generators, gameState.superHumanSkills, gameState.humans.assigned, humanBonusPerHuman, totalGlobalMultiplier, prestigeBonus, researchMultiplier, lifeBonus, infiniteProjectBonus, ip1Special, specificGeneratorMultipliers]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const now = Date.now();
+      const deltaTimeInSeconds = (now - lastTickTimeRef.current) / 1000;
+      lastTickTimeRef.current = now;
+      
+      setGameState(prev => {
+        let currentAtoms = prev.atoms.add(atomsPerSecond.mul(deltaTimeInSeconds));
+        let currentLives = prev.lives.add(livesPerSecond.mul(deltaTimeInSeconds));
+        let currentSkillPoints = prev.skillPoints.add(skillPointGenerationRate.mul(deltaTimeInSeconds));
+        let currentArtificialIngenuity = prev.artificialIngenuity.add(artificialIngenuityPerSecond.mul(deltaTimeInSeconds));
+        let currentGenerators = [...prev.generators];
+        let currentUpgrades = [...prev.upgrades];
+
+        if (prev.autoBuyGenerators && prev.research.find(r => r.id === 'res8')?.isPurchased) {
+            const effectiveGens = getEffectiveGenerators({ ...prev, atoms: currentAtoms, generators: currentGenerators, humanSkills: prev.humanSkills }); 
+            const sortedGenerators = [...effectiveGens].sort((a, b) => {
+                const costA = calculatePurchaseCost(a, 1);
+                const costB = calculatePurchaseCost(b, 1);
+                return costA.cmp(costB);
+            });
+            for (const gen of sortedGenerators) {
+                const cost = calculatePurchaseCost(gen, 1);
+                if (currentAtoms.gte(cost)) {
+                    const genIndex = currentGenerators.findIndex(g => g.id === gen.id);
+                    if (genIndex !== -1) {
+                        currentGenerators[genIndex] = { ...currentGenerators[genIndex], count: currentGenerators[genIndex].count + 1 };
+                        currentAtoms = currentAtoms.sub(cost);
+                        break;
+                    }
+                }
+            }
+        }
+        if (prev.autoBuyUpgrades && prev.research.find(r => r.id === 'res9')?.isPurchased) {
+            const effectiveUpgs = getEffectiveUpgrades({ ...prev, atoms: currentAtoms, upgrades: currentUpgrades, research: prev.research, generators: prev.generators, subjects: prev.subjects, lifeTechnologies: prev.lifeTechnologies }); 
+            const sortedUpgrades = [...effectiveUpgs].filter(upg => {
+                const isMaxLevel = upg.maxLevel !== undefined && upg.level >= upg.maxLevel;
+                return !isMaxLevel;
+            }).sort((a, b) => {
+                const costA = calculatePurchaseCost({ ...a, count: a.level }, 1);
+                const costB = calculatePurchaseCost({ ...b, count: b.level }, 1);
+                return costA.cmp(costB);
+            });
+            for (const upg of sortedUpgrades) {
+                const cost = calculatePurchaseCost({ ...upg, count: upg.level }, 1);
+                if (currentAtoms.gte(cost)) {
+                    const upgIndex = currentUpgrades.findIndex(u => u.id === upg.id);
+                    if (upgIndex !== -1) {
+                        currentUpgrades[upgIndex] = { ...currentUpgrades[upgIndex], level: currentUpgrades[upgIndex].level + 1 };
+                        currentAtoms = currentAtoms.sub(cost);
+                        break;
+                    }
+                }
+            }
+        }
+        return { ...prev, atoms: currentAtoms, lives: currentLives, skillPoints: currentSkillPoints, artificialIngenuity: currentArtificialIngenuity, generators: currentGenerators, upgrades: currentUpgrades };
+      });
+    }, GAME_TICK_RATE_MS);
+    return () => clearInterval(interval);
+  }, [atomsPerSecond, livesPerSecond, skillPointGenerationRate, artificialIngenuityPerSecond, getEffectiveGenerators, getEffectiveUpgrades]);
+
+  useEffect(() => {
+    if (!gameState.subjectsUnlocked && gameState.atoms.gte(SUBJECTS_UNLOCK_REQUIREMENT)) {
+        setGameState(prev => ({...prev, subjectsUnlocked: true}));
+        setActiveTab('subjects');
+    }
+    if (gameState.subjectsUnlocked && !gameState.humansUnlocked && gameState.lives.gte(HUMANS_UNLOCK_REQUIREMENT)) {
+        setGameState(prev => ({...prev, humansUnlocked: true}));
+        setActiveTab('subjects');
+    }
+     if (gameState.humansUnlocked && !gameState.superHumansUnlocked && new D(gameState.humans.total).gte(SUPER_HUMAN_UNLOCK_REQUIREMENT)) {
+        setGameState(prev => ({...prev, superHumansUnlocked: true}));
+        setActiveTab('superHumans');
+        /*setGameState(prev => ({
+            ...prev,
+            generators: prev.generators.map(g => g.id === 'gen5' ? { ...g, isHidden: false } : g)
+        }));*/
+    }
+  }, [gameState.atoms, gameState.lives, gameState.humans.total, gameState.subjectsUnlocked, gameState.humansUnlocked, gameState.superHumansUnlocked]);
+
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const currentState = gameStateRef.current;
+      const stateToSave = {
+        atoms: currentState.atoms.toString(), prestigePoints: currentState.prestigePoints.toString(), lives: currentState.lives.toString(),
+        subjectsUnlocked: currentState.subjectsUnlocked, humans: currentState.humans, humansUnlocked: currentState.humansUnlocked,
+        skillPoints: currentState.skillPoints.toString(),
+        generators: currentState.generators.map(g => ({ id: g.id, count: g.count })),
+        upgrades: currentState.upgrades.map(u => ({ id: u.id, level: u.level })),
+        research: currentState.research.map(r => ({ id: r.id, isPurchased: r.isPurchased })),
+        subjects: currentState.subjects.map(s => ({ id: s.id, count: s.count})),
+        humanSkills: currentState.humanSkills.map(s => ({ id: s.id, level: s.level})),
+        infiniteProjects: currentState.infiniteProjects.map(p => ({ id: p.id, level: p.level })),
+        prestigeSkills: currentState.prestigeSkills.map(s => ({ id: s.id, level: s.level })),
+        lifeTechnologies: currentState.lifeTechnologies.map(t => ({ id: t.id, level: t.level })),
+        autoBuyGenerators: currentState.autoBuyGenerators,
+        autoBuyUpgrades: currentState.autoBuyUpgrades,
+        superHumans: currentState.superHumans,
+        superHumansAssigned: currentState.superHumansAssigned,
+        artificialIngenuity: currentState.artificialIngenuity.toString(),
+        superHumansUnlocked: currentState.superHumansUnlocked,
+        superHumanSkills: currentState.superHumanSkills.map(s => ({ id: s.id, level: s.level })),
+      };
+      localStorage.setItem('atomIdleGameState', JSON.stringify(stateToSave));
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const effectiveGenerators = useMemo(() => {
+      return getEffectiveGenerators(gameState);
+  }, [gameState, getEffectiveGenerators]);
+  
+  const visibleResearch = useMemo(() => gameState.research.filter(res => res.unlockCondition ? res.unlockCondition(gameState) : true), [gameState]);
+  const visibleInfiniteProjects = useMemo(() => gameState.humansUnlocked ? gameState.infiniteProjects : [], [gameState.humansUnlocked, gameState.infiniteProjects]);
+
+  const handleBuyGenerator = useCallback((id, amount) => {
+    setGameState(prev => {
+      const generatorToBuy = effectiveGenerators.find(g => g.id === id);
+      if (!generatorToBuy || amount <= 0) return prev;
+      const cost = calculatePurchaseCost(generatorToBuy, amount);
+      if (prev.atoms.gte(cost)) {
+        const newGenerators = prev.generators.map(g => g.id === id ? { ...g, count: g.count + amount } : g);
+        return { ...prev, atoms: prev.atoms.sub(cost), generators: newGenerators };
+      }
+      return prev;
+    });
+  }, [effectiveGenerators]);
+
+  const handleBuyUpgrade = useCallback((id, amount) => {
+    setGameState(prev => {
+        const originalUpgrade = prev.upgrades.find(u => u.id === id);
+        if (!originalUpgrade) return prev;
+        
+        const effectiveUpgrade = effectiveUpgrades.find(u => u.id === id);
+        const isAlreadyMaxLevel = effectiveUpgrade.maxLevel !== undefined && effectiveUpgrade.level >= effectiveUpgrade.maxLevel;
+        if (isAlreadyMaxLevel || amount <= 0) return prev;
+        
+        const cappedAmount = effectiveUpgrade.maxLevel ? Math.min(amount, effectiveUpgrade.maxLevel - effectiveUpgrade.level) : amount;
+        if (cappedAmount <= 0) return prev;
+
+        const cost = calculatePurchaseCost({ ...originalUpgrade, count: originalUpgrade.level }, cappedAmount);
+        if (prev.atoms.gte(cost)) {
+            const newUpgrades = prev.upgrades.map(u => u.id === id ? { ...u, level: u.level + cappedAmount } : u);
+            return { ...prev, atoms: prev.atoms.sub(cost), upgrades: newUpgrades };
+        }
+        return prev;
+    });
+  }, [effectiveUpgrades]);
+
+  const handlePrestige = useCallback(() => {
+    setGameState(prev => {
+        if (prev.atoms.lt(PRESTIGE_REQUIREMENT)) return prev;
+        const prestigePointsGainedBase = prev.atoms.div(PRESTIGE_REQUIREMENT).sqrt().mul(prestigeSkillBonus);
+        const prestigePointsGained = calculatePrestigeGainWithSoftcap(prev.prestigePoints, prestigePointsGainedBase);
+        
+        const newState = getInitialGameState(); 
+        
+        newState.research = prev.research;
+        newState.subjects = prev.subjects;
+        newState.lives = prev.lives;
+        newState.subjectsUnlocked = prev.subjectsUnlocked;
+        newState.humans = prev.humans;
+        newState.humansUnlocked = prev.humansUnlocked;
+        newState.skillPoints = prev.skillPoints;
+        newState.humanSkills = prev.humanSkills;
+        newState.infiniteProjects = prev.infiniteProjects;
+        newState.prestigeSkills = prev.prestigeSkills;
+        newState.lifeTechnologies = prev.lifeTechnologies;
+        newState.autoBuyGenerators = prev.autoBuyGenerators;
+        newState.autoBuyUpgrades = prev.autoBuyUpgrades;
+        newState.superHumans = prev.superHumans;
+        newState.superHumansAssigned = prev.superHumansAssigned;
+        newState.artificialIngenuity = prev.artificialIngenuity;
+        newState.superHumansUnlocked = prev.superHumansUnlocked;
+        newState.superHumanSkills = prev.superHumanSkills;
+        
+        newState.prestigePoints = prev.prestigePoints.add(prestigePointsGained);
+        
+        const ps3Level = prev.prestigeSkills.find(s => s.id === 'ps3')?.level || 0;
+        const startingAtomsMultiplier = new D(1).add(ps3Level);
+
+        if (prev.research.find(r => r.id === 'res4' && r.isPurchased)) {
+             newState.atoms = prev.atoms.mul(0.01).mul(startingAtomsMultiplier);
+        } else {
+            newState.atoms = new D(1).mul(startingAtomsMultiplier);
+        }
+
+        if (prev.research.find(r => r.id === 'res2' && r.isPurchased)) {
+            const gen1 = newState.generators.find(g => g.id === 'gen1');
+            if (gen1) gen1.count = RESEARCH_STARTING_BOOST_AMOUNT;
+        }
+        return newState; 
+    });
+  }, [prestigeSkillBonus]);
+
+  const handleBuyResearch = useCallback((id) => {
+    setGameState(prev => {
+        const researchToBuy = prev.research.find(r => r.id === id);
+        if (!researchToBuy || researchToBuy.isPurchased) return prev;
+
+        const effectiveCost = new D(researchToBuy.cost).mul(researchCostReduction);
+        if (prev.prestigePoints.lt(effectiveCost)) return prev;
+        
+        const dependenciesMet = researchToBuy.dependencies.every(depId => prev.research.find(r => r.id === depId)?.isPurchased);
+        if (dependenciesMet) {
+            const newResearch = prev.research.map(r => r.id === id ? { ...r, isPurchased: true } : r);
+            return { ...prev, prestigePoints: prev.prestigePoints.sub(effectiveCost), research: newResearch };
+        }
+        return prev;
+    });
+  }, [researchCostReduction]);
+
+  const handleBuySubject = useCallback((id, amount) => {
+    setGameState(prev => {
+        const subjectToBuy = prev.subjects.find(s => s.id === id);
+        if (!subjectToBuy || amount <= 0) return prev;
+        const cost = calculatePurchaseCost(subjectToBuy, amount);
+        let resourcePool;
+        if (subjectToBuy.costResource === 'atoms') resourcePool = prev.atoms;
+        else if (subjectToBuy.costResource === 'lives') resourcePool = prev.lives;
+        
+        if (!resourcePool || resourcePool.lt(cost)) return prev;
+        
+        const newState = { ...prev };
+        if (subjectToBuy.costResource === 'atoms') newState.atoms = prev.atoms.sub(cost);
+        else if (subjectToBuy.costResource === 'lives') newState.lives = prev.lives.sub(cost);
+        
+        newState.subjects = prev.subjects.map(s => s.id === id ? { ...s, count: s.count + amount } : s);
+        return newState;
+    });
+  }, []);
+  
+  const handleHumanAscension = useCallback((gained) => {
+    if (gained <= 0) return;
+    setGameState(prev => {
+        const maxAffordable = calculateMaxAffordable({
+            baseCost: HUMANS_UNLOCK_REQUIREMENT,
+            costIncreaseFactor: HUMAN_COST_INCREASE_FACTOR,
+            count: prev.humans.total
+        }, prev.lives);
+
+        if (gained > maxAffordable) return prev;
+
+        const initialState = getInitialGameState();
+        initialState.humans = { total: prev.humans.total + gained, assigned: {} };
+        initialState.humansUnlocked = true;
+        initialState.skillPoints = prev.skillPoints;
+        initialState.humanSkills = prev.humanSkills;
+        initialState.superHumans = prev.superHumans;
+        initialState.superHumansAssigned = prev.superHumansAssigned;
+        initialState.artificialIngenuity = prev.artificialIngenuity;
+        initialState.superHumansUnlocked = prev.superHumansUnlocked;
+        initialState.superHumanSkills = prev.superHumanSkills;
+        initialState.autoBuyGenerators = prev.autoBuyGenerators;
+        initialState.autoBuyUpgrades = prev.autoBuyUpgrades;
+        
+        const res8 = prev.research.find(r => r.id === 'res8');
+        const res9 = prev.research.find(r => r.id === 'res9');
+        if (res8) initialState.research.find(r => r.id === 'res8').isPurchased = res8.isPurchased;
+        if (res9) initialState.research.find(r => r.id === 'res9').isPurchased = res9.isPurchased;
+        return initialState;
+    });
+}, []);
+
+const handleSuperHumanAscension = useCallback((amount) => {
+    if (!amount || amount <= 0) return;
+    setGameState(prev => {
+        const item = {
+            baseCost: SUPER_HUMAN_UNLOCK_REQUIREMENT,
+            costIncreaseFactor: SUPER_HUMAN_COST_INCREASE_FACTOR,
+            count: prev.superHumans
+        };
+        const cost = calculatePurchaseCost(item, amount);
+        
+        if (new D(prev.humans.total).lt(cost)) return prev;
+        
+        const gained = amount;
+
+        const initialState = getInitialGameState();
+        initialState.superHumans = prev.superHumans + gained;
+        initialState.superHumanSkills = prev.superHumanSkills;
+        initialState.artificialIngenuity = prev.artificialIngenuity;
+        initialState.superHumansUnlocked = true;
+        
+        const shs5Level = prev.superHumanSkills.find(s => s.id === 'shs5')?.level || 0;
+        if (shs5Level > 0) {
+            initialState.humans = { total: shs5Level * 10, assigned: {} };
+            initialState.humansUnlocked = true;
+        }
+        return initialState;
+    });
+  }, []);
+
+  const handleAssignSuperHuman = useCallback((projectId, amount) => {
+    setGameState(prev => {
+        if (amount === 0) return prev;
+        const assignedCount = Object.values(prev.superHumansAssigned || {}).reduce((sum, c) => sum + c, 0);
+        const available = prev.superHumans - assignedCount;
+        const newAssigned = { ...prev.superHumansAssigned };
+        const current = newAssigned[projectId] || 0;
+        let actualAmount = (amount > 0) ? Math.min(amount, available) : -Math.min(-amount, current);
+        if (actualAmount === 0) return prev;
+        newAssigned[projectId] = current + actualAmount;
+        return { ...prev, superHumansAssigned: newAssigned };
+    });
+    }, []);
+
+  const handleAssignHuman = useCallback((generatorId, amount) => {
+    setGameState(prev => {
+        if (amount === 0) return prev;
+        const assignedHumansCount = Object.values(prev.humans.assigned).reduce((sum, count) => sum + count, 0);
+        const availableHumans = prev.humans.total - assignedHumansCount;
+        const newAssigned = { ...prev.humans.assigned };
+        const currentAssignment = newAssigned[generatorId] || 0;
+        let actualAmount = (amount > 0) ? Math.min(amount, availableHumans) : -Math.min(-amount, currentAssignment);
+        if (actualAmount === 0) return prev;
+        newAssigned[generatorId] = currentAssignment + actualAmount;
+        return { ...prev, humans: { ...prev.humans, assigned: newAssigned } };
+    });
+  }, []);
+
+  const handleBuySkill = useCallback((skillId) => {
+      setGameState(prev => {
+          const skill = prev.humanSkills.find(s => s.id === skillId);
+          if (!skill) return prev;
+          const isMaxLevel = skill.maxLevel && skill.level >= skill.maxLevel;
+          if (isMaxLevel) return prev;
+          const cost = new D(skill.baseCost).mul(new D(skill.costIncreaseFactor).pow(skill.level));
+          if (prev.skillPoints.gte(cost)) {
+              const newSkills = prev.humanSkills.map(s => s.id === skillId ? {...s, level: s.level + 1} : s);
+              return {...prev, humanSkills: newSkills, skillPoints: prev.skillPoints.sub(cost)};
+          }
+          return prev;
+      });
+  }, []);
+
+  const handleBuySuperHumanSkill = useCallback((skillId) => {
+      setGameState(prev => {
+          const skill = prev.superHumanSkills.find(s => s.id === skillId);
+          if (!skill) return prev;
+          const isMaxLevel = skill.maxLevel && skill.level >= skill.maxLevel;
+          if (isMaxLevel) return prev;
+          const cost = new D(skill.baseCost).mul(new D(skill.costIncreaseFactor).pow(skill.level));
+          if (prev.artificialIngenuity.gte(cost)) {
+              const newSkills = prev.superHumanSkills.map(s => s.id === skillId ? {...s, level: s.level + 1} : s);
+              return {...prev, superHumanSkills: newSkills, artificialIngenuity: prev.artificialIngenuity.sub(cost)};
+          }
+          return prev;
+      });
+  }, []);
+
+  const handleBuyInfiniteProject = useCallback((projectId) => {
+      setGameState(prev => {
+          const project = prev.infiniteProjects.find(p => p.id === projectId);
+          if (!project) return prev;
+          const cost = new D(project.baseCost).mul(new D(project.costIncreaseFactor).pow(project.level));
+          if (prev.atoms.gte(cost)) {
+              const newProjects = prev.infiniteProjects.map(p => p.id === projectId ? {...p, level: p.level + 1} : p);
+              return {...prev, infiniteProjects: newProjects, atoms: prev.atoms.sub(cost)};
+          }
+          return prev;
+      });
+  }, []);
+
+  const handleBuyPrestigeSkill = useCallback((skillId, amount) => {
+      setGameState(prev => {
+          const skill = prev.prestigeSkills.find(s => s.id === skillId);
+          if (!skill || amount <= 0) return prev;
+          const isAlreadyMaxLevel = skill.maxLevel !== undefined && skill.level >= skill.maxLevel;
+          if (isAlreadyMaxLevel) return prev;
+          const cappedAmount = skill.maxLevel ? Math.min(amount, skill.maxLevel - skill.level) : amount;
+          if (cappedAmount <= 0) return prev;
+          const cost = calculatePurchaseCost({ ...skill, count: skill.level }, cappedAmount);
+          if (prev.prestigePoints.gte(cost)) {
+              const newSkills = prev.prestigeSkills.map(s => s.id === skillId ? {...s, level: s.level + cappedAmount} : s);
+              return {...prev, prestigeSkills: newSkills, prestigePoints: prev.prestigePoints.sub(cost)};
+          }
+          return prev;
+      });
+  }, []);
+
+  const handleBuyLifeTechnology = useCallback((techId, amount) => {
+      setGameState(prev => {
+          const tech = prev.lifeTechnologies.find(t => t.id === techId);
+          if (!tech || amount <= 0) return prev;
+          const isAlreadyMaxLevel = tech.maxLevel !== undefined && tech.level >= tech.maxLevel;
+          if (isAlreadyMaxLevel) return prev;
+          const cappedAmount = tech.maxLevel ? Math.min(amount, tech.maxLevel - tech.level) : amount;
+          if (cappedAmount <= 0) return prev;
+          const cost = calculatePurchaseCost({ ...tech, count: tech.level }, cappedAmount);
+          if (prev.lives.gte(cost)) {
+              const newTechs = prev.lifeTechnologies.map(t => t.id === techId ? {...t, level: t.level + cappedAmount} : t);
+              return {...prev, lifeTechnologies: newTechs, lives: prev.lives.sub(cost)};
+          }
+          return prev;
+      });
+  }, []);
+
+  const toggleAutoBuyGenerators = useCallback(() => {
+    setGameState(prev => ({ ...prev, autoBuyGenerators: !prev.autoBuyGenerators }));
+  }, []);
+
+  const toggleAutoBuyUpgrades = useCallback(() => {
+    setGameState(prev => ({ ...prev, autoBuyUpgrades: !prev.autoBuyUpgrades }));
+  }, []);
+
+
+  const handleHardReset = useCallback(() => {
+    if (window.confirm('Are you sure you want to delete all your progress? This action is irreversible and will restart the game from scratch.')) {
+        localStorage.removeItem('atomIdleGameState');
+        setGameState(getInitialGameState());
+        window.location.reload();
+    }
+  }, []);
+
+  return React.createElement("div", { className: "bg-slate-900 text-slate-100 min-h-screen font-sans" },
+      React.createElement(Header, { ...gameState, atomsPerSecond, livesPerSecond, artificialIngenuityPerSecond }),
+      React.createElement("main", { className: "max-w-7xl mx-auto p-4" },
+        React.createElement("div", { className: "mb-6 flex justify-center border-b border-slate-700 flex-wrap" },
+          React.createElement("button", { onClick: () => setActiveTab('main'), className: `px-4 py-2 text-lg font-semibold border-b-2 transition-colors ${activeTab === 'main' ? 'border-cyan-400 text-cyan-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Main"),
+          React.createElement("button", { onClick: () => setActiveTab('guide'), className: `px-4 py-2 text-lg font-semibold border-b-2 transition-colors ${activeTab === 'guide' ? 'border-emerald-400 text-emerald-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Guide"),
+          (gameState.atoms.gte(PRESTIGE_REQUIREMENT) || gameState.prestigePoints.gt(0)) && React.createElement("button", { onClick: () => setActiveTab('prestige'), className: `px-4 py-2 text-lg font-semibold border-b-2 transition-colors ${activeTab === 'prestige' ? 'border-yellow-400 text-yellow-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Prestige"),
+          (gameState.atoms.gte(PRESTIGE_REQUIREMENT) || gameState.prestigePoints.gt(0)) && React.createElement("button", { onClick: () => setActiveTab('research'), className: `px-4 py-2 text-lg font-semibold border-b-2 transition-colors ${activeTab === 'research' ? 'border-yellow-400 text-yellow-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Research"),
+          gameState.subjectsUnlocked && React.createElement("button", { onClick: () => setActiveTab('subjects'), className: `px-4 py-2 text-lg font-semibold border-b-2 transition-colors ${activeTab === 'subjects' ? 'border-purple-400 text-purple-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Subjects"),
+          gameState.humansUnlocked && React.createElement("button", { onClick: () => setActiveTab('humans'), className: `px-4 py-2 text-lg font-semibold border-b-2 transition-colors ${activeTab === 'humans' ? 'border-green-400 text-green-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Humans"),
+          gameState.superHumansUnlocked && React.createElement("button", { onClick: () => setActiveTab('superHumans'), className: `px-4 py-2 text-lg font-semibold border-b-2 transition-colors ${activeTab === 'superHumans' ? 'border-sky-400 text-sky-300' : 'border-transparent text-slate-400 hover:text-white'}` }, "Super Humans")
+        ),
+        activeTab === 'main' && React.createElement(React.Fragment, null,
+          React.createElement("div", { className: "grid grid-cols-1 lg:grid-cols-2 gap-x-6 gap-y-4" },
+            React.createElement("div", { className: "space-y-3" },
+              React.createElement("div", { className: "flex justify-between items-center" },
+                React.createElement("h2", { className: "text-2xl font-bold text-slate-300" }, "Generators"),
+                React.createElement("div", { className: "flex items-center" },
+                  React.createElement("span", { className: "text-slate-400 mr-2 text-sm" }, "Buy:"),
+                  [1, 5, 10, 50, 'MAX'].map((amount) => React.createElement("button", { key: amount.toString(), onClick: () => setBuyAmount(amount), className: `w-12 px-3 py-1 text-sm font-bold rounded-md ml-1 transition-colors ${buyAmount === amount ? 'bg-cyan-500 text-slate-900' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}` }, amount))
+                )
+              ),
+              effectiveGenerators.filter(gen => !gen.isHidden).map(gen => React.createElement(GeneratorItem, { key: gen.id, generator: gen, onBuy: handleBuyGenerator, atoms: gameState.atoms, buyAmount: buyAmount, assignedHumans: gameState.humans.assigned[gen.id] || 0, humanBonusPerHuman: humanBonusPerHuman, totalGlobalMultiplier: totalGlobalMultiplier, prestigeBonus: prestigeBonus, researchMultiplier: researchMultiplier, lifeBonus: lifeBonus, infiniteProjectBonus: infiniteProjectBonus, ip1Special: ip1Special, specificGeneratorMultipliers: specificGeneratorMultipliers, superHumanSkills: gameState.superHumanSkills }))
+            ),
+            React.createElement("div", { className: "space-y-3" },
+              React.createElement("div", { className: "flex justify-between items-center" },
+                React.createElement("h2", { className: "text-2xl font-bold text-slate-300" }, "Upgrades"),
+                React.createElement("div", { className: "flex items-center" },
+                  React.createElement("span", { className: "text-slate-400 mr-2 text-sm" }, "Buy:"),
+                  [1, 5, 10, 50, 'MAX'].map((amount) => React.createElement("button", { key: amount.toString(), onClick: () => setUpgradeBuyAmount(amount), className: `w-12 px-3 py-1 text-sm font-bold rounded-md ml-1 transition-colors ${upgradeBuyAmount === amount ? 'bg-teal-500 text-slate-900' : 'bg-slate-700 hover:bg-slate-600 text-slate-300'}` }, amount))
+                )
+              ),
+              effectiveUpgrades.map(upg => React.createElement(UpgradeItem, { key: upg.id, upgrade: upg, onBuy: handleBuyUpgrade, atoms: gameState.atoms, buyAmount: upgradeBuyAmount }))
+            )
+          ),
+          React.createElement("div", { className: "mt-8" },
+            React.createElement("h2", { className: "text-2xl font-bold mb-4 text-slate-300" }, "Options"),
+            React.createElement("div", { className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex flex-col sm:flex-row items-center justify-between gap-4" },
+              React.createElement("div", null,
+                React.createElement("h3", { className: "font-bold text-lg text-rose-400" }, "Hard Reset"),
+                React.createElement("p", { className: "text-slate-400 text-sm" }, "Deletes all saved data and starts the game from the beginning. This action cannot be undone.")
+              ),
+              React.createElement("button", { onClick: handleHardReset, className: "px-6 py-3 w-full sm:w-auto flex-shrink-0 font-bold rounded-lg transition-all duration-200 bg-rose-600 hover:bg-rose-500 active:scale-95 text-white" }, "Delete Progress")
+            ),
+            gameState.research.find(r => r.id === 'res8' && r.isPurchased) && React.createElement("div", { className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center justify-between gap-4 mt-4" },
+                React.createElement("div", null,
+                    React.createElement("h3", { className: "font-bold text-lg text-blue-400" }, "Automated Generators"),
+                    React.createElement("p", { className: "text-slate-400 text-sm" }, "Automatically buys the cheapest affordable generator.")
+                ),
+                React.createElement("button", { onClick: toggleAutoBuyGenerators, className: `px-6 py-3 font-bold rounded-lg transition-all duration-200 ${gameState.autoBuyGenerators ? 'bg-green-600 hover:bg-green-500' : 'bg-slate-600 hover:bg-slate-500'} text-white` }, gameState.autoBuyGenerators ? 'ON' : 'OFF')
+            ),
+            gameState.research.find(r => r.id === 'res9' && r.isPurchased) && React.createElement("div", { className: "bg-slate-800/50 p-4 rounded-lg border border-slate-700 flex items-center justify-between gap-4 mt-4" },
+                React.createElement("div", null,
+                    React.createElement("h3", { className: "font-bold text-lg text-purple-400" }, "Automated Upgrades"),
+                    React.createElement("p", { className: "text-slate-400 text-sm" }, "Automatically buys the cheapest affordable upgrade.")
+                ),
+                React.createElement("button", { onClick: toggleAutoBuyUpgrades, className: `px-6 py-3 font-bold rounded-lg transition-all duration-200 ${gameState.autoBuyUpgrades ? 'bg-green-600 hover:bg-green-500' : 'bg-slate-600 hover:bg-slate-500'} text-white` }, gameState.autoBuyUpgrades ? 'ON' : 'OFF')
+            )
+          )
+        ),
+        activeTab === 'guide' && React.createElement(GuideTab, null),
+        activeTab === 'prestige' && React.createElement(PrestigeTab, { gameState, onPrestige: handlePrestige, onBuyPrestigeSkill: handleBuyPrestigeSkill, prestigeSkillBuyAmount, setPrestigeSkillBuyAmount, prestigeSkillBonus: prestigeSkillBonus, researchCostReduction: researchCostReduction }),
+        activeTab === 'research' && React.createElement(ResearchTree, { research: visibleResearch, prestigePoints: gameState.prestigePoints, onBuyResearch: handleBuyResearch, infiniteProjects: visibleInfiniteProjects, onBuyInfiniteProject: handleBuyInfiniteProject, atoms: gameState.atoms, researchCostReduction: researchCostReduction }),
+        activeTab === 'subjects' && React.createElement(Subjects, { subjects: gameState.subjects, gameState: gameState, onBuySubject: handleBuySubject, onAscend: handleHumanAscension, buyAmount: subjectBuyAmount, setBuyAmount: setSubjectBuyAmount, lifeProductionMultiplier: lifeProductionMultiplier, lifeTechnologies: gameState.lifeTechnologies, onBuyLifeTechnology: handleBuyLifeTechnology, lifeTechBuyAmount: lifeTechBuyAmount, setLifeTechBuyAmount: setLifeTechBuyAmount }),
+        activeTab === 'humans' && React.createElement(HumansTab, { gameState: gameState, onAssignHuman: handleAssignHuman, onBuySkill: handleBuySkill, humanBonusPerHuman: humanBonusPerHuman }),
+        activeTab === 'superHumans' && React.createElement(SuperHumansTab, { gameState: gameState, onAscend: handleSuperHumanAscension, onBuySkill: handleBuySuperHumanSkill, artificialIngenuityPerSecond: artificialIngenuityPerSecond, onAssignSuperHuman: handleAssignSuperHuman })
+      )
+    );
+};
+
+const rootElement = document.getElementById('root');
+if (!rootElement) throw new Error("Could not find root element to mount to");
+const root = ReactDOM.createRoot(rootElement);
+root.render(React.createElement(React.StrictMode, null, React.createElement(App, null)));
+    </script>
+  </body>
+</html>
